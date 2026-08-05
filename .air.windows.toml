@@ -1,0 +1,30 @@
+# Development hot-reload backend (Windows).
+# Dipakai otomatis oleh: npm run dev / scripts/dev.bat / scripts/dev.ps1
+
+root = "."
+tmp_dir = ".tmp/air"
+
+[build]
+  # Di Windows, go build menambahkan .exe bila output tanpa ekstensi — kita set eksplisit.
+  cmd = "go build -ldflags \"-X wa-assistant/backend/license.DevMode=true\" -o ./.tmp/air/wa-assistant.exe ./backend"
+  entrypoint = ["./.tmp/air/wa-assistant.exe"]
+  include_dir = ["backend"]
+  include_ext = ["go"]
+  include_file = ["go.mod", "go.sum", ".env"]
+  exclude_dir = ["frontend", ".git", ".tmp", "data", "dist"]
+  exclude_regex = ["_test.go"]
+  delay = 500
+  kill_delay = "2s"
+  send_interrupt = true
+  stop_on_error = false
+  log = "build-errors.log"
+
+[log]
+  time = true
+
+[misc]
+  clean_on_exit = true
+
+[screen]
+  clear_on_rebuild = false
+  keep_scroll = true

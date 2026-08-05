@@ -1,0 +1,12 @@
+{
+  "name": "whatsapp-blast-source",
+  "private": true,
+  "description": "WA AI Assistant — launcher development lintas macOS/Windows/Linux",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:backend": "go run ./backend",
+    "dev:frontend": "npm --prefix frontend run dev -- --host 127.0.0.1 --port 5173",
+    "setup": "go mod download && npm --prefix frontend install",
+    "setup:env": "node -e \"const fs=require('fs');if(!fs.existsSync('.env')){fs.copyFileSync('.env.example','.env');console.log('Created .env from .env.example');}else{console.log('.env already exists');}\""
+  }
+}

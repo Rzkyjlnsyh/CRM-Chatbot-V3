@@ -1,0 +1,286 @@
+/* ============================================================
+   DESIGN TOKENS — SlaluDiskon
+   Flat / border-first. Shadow hanya untuk focus ring.
+   ============================================================ */
+:root {
+  /* --- Font family --- */
+  --font-sans: Inter, Roboto, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+  /* --- Color: Brand --- */
+  --color-primary: #168A4A;
+  --color-primary-light: #2DB86A;
+  --color-primary-dark: #0C5C30;
+  --color-primary-contrast: #FFFFFF;
+  --color-primary-soft: rgba(22, 138, 74, 0.12);
+
+  /* --- Color: Semantic --- */
+  --color-success: #148F45;
+  --color-warning: #C2410C;
+  --color-danger: #D32F2F;
+  --color-info: #1565C0;
+
+  /* --- Color: Surface --- */
+  --color-bg: #F6F7F6;
+  --color-bg-alt: #EEF1EF;
+  --color-surface: #FFFFFF;
+  --color-surface-muted: #F0F3F1;
+
+  /* --- Color: Text --- */
+  --color-text: #111814;
+  --color-text-secondary: #4A554F;
+  --color-text-disabled: #8A948D;
+  --color-text-on-primary: #FFFFFF;
+
+  /* --- Color: Border / Divider --- */
+  --color-border: #D7E0D9;
+  --color-border-light: #E8EEE9;
+
+  /* --- Color: Accent (WhatsApp) --- */
+  --color-wa-green: #25D366;
+  --color-wa-green-soft: rgba(37, 211, 102, 0.12);
+
+  /* --- Font sizes --- */
+  --font-xs: 12px;
+  --font-sm: 13.5px;
+  --font-md: 15px;
+  --font-lg: 17px;
+  --font-xl: 20px;
+  --font-2xl: 26px;
+  --font-3xl: 32px;
+  --font-4xl: 40px;
+
+  /* --- Font weights --- */
+  --fw-normal: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+  --fw-bold: 700;
+
+  /* --- Spacing scale (4px base) --- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  /* --- Border radius --- */
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-full: 9999px;
+
+  /* --- Sidebar --- */
+  --sidebar-width: 240px;
+
+  /* --- Container --- */
+  --container-max: 1200px;
+
+  /* --- Transitions --- */
+  --transition-fast: 140ms ease;
+  --transition-normal: 220ms ease;
+
+  /* --- Z-index --- */
+  --z-sidebar: 100;
+  --z-drawer: 200;
+  --z-modal: 1000;
+  --z-toast: 2000;
+  --z-swal: 20000;
+
+  /* --- Base setup --- */
+  font-family: var(--font-sans);
+  color: var(--color-text);
+  background: var(--color-bg);
+  color-scheme: light;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-width: 320px;
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  min-height: 100svh;
+  overflow-x: hidden;
+  background: var(--color-bg);
+}
+
+#root {
+  min-height: 100svh;
+}
+
+a {
+  color: inherit;
+}
+
+code {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 4px;
+  padding: 1px var(--space-1);
+  background: var(--color-surface-muted);
+  color: #243028;
+  font-family: var(--font-mono);
+  font-size: 0.86em;
+  border: 1px solid var(--color-border-light);
+}
+
+/*
+ * MUI OutlinedInput: tutup notch legend saat label tidak shrink.
+ */
+.MuiFormControl-root:has(.MuiInputLabel-outlined:not(.MuiInputLabel-shrink))
+  .MuiOutlinedInput-notchedOutline > legend {
+  width: 0 !important;
+  max-width: 0 !important;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+}
+
+.MuiFormControl-root:has(.MuiInputLabel-outlined:not(.MuiInputLabel-shrink))
+  .MuiOutlinedInput-notchedOutline > legend > span {
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+}
+
+/* Kill residual elevation/shadow from any component */
+.MuiPaper-elevation1,
+.MuiPaper-elevation2,
+.MuiPaper-elevation3,
+.MuiPaper-elevation4,
+.MuiPaper-elevation8,
+.MuiPaper-elevation16,
+.MuiPaper-elevation24 {
+  box-shadow: none !important;
+}
+
+/* ============================================================
+   SweetAlert2 — flat, border-first
+   ============================================================ */
+.swal2-container {
+  z-index: var(--z-swal) !important;
+}
+.swal2-popup {
+  font-family: var(--font-sans);
+  border-radius: var(--radius-lg) !important;
+  border: 1px solid var(--color-border) !important;
+  box-shadow: none !important;
+}
+.swal2-confirm,
+.swal2-cancel {
+  border-radius: var(--radius-sm) !important;
+  font-weight: var(--fw-semibold) !important;
+  font-size: var(--font-sm) !important;
+  box-shadow: none !important;
+}
+.swal2-title {
+  font-size: var(--font-lg) !important;
+  font-weight: var(--fw-semibold) !important;
+  color: var(--color-text) !important;
+}
+.swal2-html-container {
+  font-size: var(--font-sm) !important;
+  color: var(--color-text-secondary) !important;
+}
+.swal2-input {
+  border-radius: var(--radius-sm) !important;
+  font-size: var(--font-sm) !important;
+  border-color: var(--color-border) !important;
+  box-shadow: none !important;
+}
+.swal2-input:focus {
+  border-color: var(--color-primary) !important;
+  box-shadow: 0 0 0 2px var(--color-primary-soft) !important;
+}
+
+/* Progress Blast */
+@keyframes blast-progress-stripes {
+  from { background-position: 0 0; }
+  to { background-position: 24px 0; }
+}
+
+.blast-progress .MuiLinearProgress-bar {
+  transition: transform 600ms ease;
+}
+
+.blast-progress--active .MuiLinearProgress-bar {
+  background-image: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.22) 25%,
+    transparent 25%,
+    transparent 50%,
+    rgba(255, 255, 255, 0.22) 50%,
+    rgba(255, 255, 255, 0.22) 75%,
+    transparent 75%,
+    transparent
+  );
+  background-size: 24px 24px;
+  animation: blast-progress-stripes 850ms linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .blast-progress .MuiLinearProgress-bar {
+    animation: none;
+    transition: none;
+  }
+}
+
+/* AI agent live indicator — subtle opacity, no expanding shadow */
+@keyframes ai-agent-breathe {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.82; }
+}
+
+@keyframes ai-agent-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.7; transform: scale(0.92); }
+}
+
+.ai-agent-avatar--active {
+  animation: ai-agent-breathe 2.8s ease-in-out infinite;
+}
+
+.ai-agent-status--active {
+  animation: ai-agent-pulse 1.8s ease-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ai-agent-avatar--active,
+  .ai-agent-status--active {
+    animation: none;
+  }
+}
+
+/* Sidebar nav — pill + menu aktif solid (tegas) */
+.nav-item {
+  border-radius: 999px !important;
+  transition: background-color var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
+}
+.nav-item--active {
+  background: var(--color-primary) !important;
+  color: var(--color-primary-contrast) !important;
+  border-color: var(--color-primary) !important;
+  border-radius: 999px !important;
+}
+.nav-item--active:hover {
+  background: var(--color-primary-dark) !important;
+  color: var(--color-primary-contrast) !important;
+  border-color: var(--color-primary-dark) !important;
+}
+.nav-item--active .MuiButton-startIcon {
+  color: inherit !important;
+}

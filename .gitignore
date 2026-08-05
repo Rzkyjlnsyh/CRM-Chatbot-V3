@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+frontend/node_modules/
+
+# Build output
+*.exe
+frontend/dist/
+.tmp/
+
+# Sensitive — jangan commit!
+.env
+
+# WhatsApp session & data
+data/
+wa-assistant.db
+wa-assistant.db-shm
+wa-assistant.db-wal
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Vite cache
+.vite/
