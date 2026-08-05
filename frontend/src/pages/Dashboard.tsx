@@ -319,6 +319,8 @@ export default function Dashboard() {
   const [profileSaving, setProfileSaving] = useState(false);
   const [profileModalOpen, setProfileModalOpen] = useState(false);
   const [apiKey, setApiKey] = useState('');
+  const [deepseekKey, setDeepseekKey] = useState('');
+  const [chatProvider, setChatProvider] = useState('deepseek-direct'); // deepseek-direct | openrouter
   const [apiModel, setApiModel] = useState('deepseek/deepseek-chat');
   const [visionModel, setVisionModel] = useState('');
   const [embeddingModel, setEmbeddingModel] = useState('openai/text-embedding-3-small');
@@ -618,6 +620,8 @@ export default function Dashboard() {
   const saveAPIConfigOnly = async () => {
     const apiConfig: Record<string, string> = {};
     if (apiKey && !apiKey.includes('*')) apiConfig.api_key = apiKey;
+    if (deepseekKey && !deepseekKey.includes('*')) apiConfig.deepseek_api_key = deepseekKey;
+    if (chatProvider) apiConfig.chat_provider = chatProvider;
     if (apiModel) apiConfig.api_model = apiModel;
     if (visionModel) apiConfig.vision_model = visionModel;
     if (embeddingModel) apiConfig.embedding_model = embeddingModel;
@@ -686,6 +690,8 @@ export default function Dashboard() {
       const res = await api.get('/settings/api-config');
       const cfg = res.data;
       if (cfg.api_key) setApiKey(cfg.api_key);
+      if (cfg.deepseek_api_key) setDeepseekKey(cfg.deepseek_api_key);
+      if (cfg.chat_provider) setChatProvider(cfg.chat_provider);
       if (cfg.api_model) setApiModel(cfg.api_model);
       if (cfg.vision_model) setVisionModel(cfg.vision_model);
       if (cfg.embedding_model) setEmbeddingModel(cfg.embedding_model);
@@ -2010,6 +2016,38 @@ export default function Dashboard() {
                   helperText={apiKey.includes('*') ? 'API key sudah tersimpan. Biarkan apa adanya jika tidak ingin mengganti.' : 'Key disimpan terenkripsi dan tidak ditampilkan kembali secara utuh.'}
                   sx={{ mb: 2 }}
                 />
+              </CardContent>
+            </Card>
+
+            {/* DeepSeek Direct API */}
+            <Card sx={{ mb: 1.5 }}>
+              <CardContent>
+                <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.5 }}>DeepSeek Direct · lebih hemat 90%</Typography>
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
+                  API langsung DeepSeek untuk chat AI. Lebih murah ($0.27/M input) dan cepat. Buat key di{' '}
+                  <Link href="https://platform.deepseek.com" target="_blank" rel="noopener">platform.deepseek.com</Link>.
+                </Typography>
+
+                <FormControl size="small" fullWidth sx={{ mb: 1.5 }}>
+                  <InputLabel>Provider Chat AI</InputLabel>
+                  <Select value={chatProvider} label="Provider Chat AI" onChange={e => setChatProvider(e.target.value)}>
+                    <MenuItem value="deepseek-direct">DeepSeek Direct (rekomendasi — hemat)</MenuItem>
+                    <MenuItem value="openrouter">OpenRouter (supermarket model)</MenuItem>
+                  </Select>
+                </FormControl>
+
+                {chatProvider === 'deepseek-direct' && (
+                  <TextField
+                    label="API Key DeepSeek"
+                    size="small"
+                    type="password"
+                    fullWidth
+                    value={deepseekKey}
+                    onChange={e => setDeepseekKey(e.target.value)}
+                    placeholder="sk-..."
+                    helperText={deepseekKey.includes('*') ? 'API key sudah tersimpan.' : 'Key disimpan terenkripsi.'}
+                  />
+                )}
               </CardContent>
             </Card>
 

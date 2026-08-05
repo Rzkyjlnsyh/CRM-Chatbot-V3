@@ -2,7 +2,11 @@ package models
 
 import "time"
 
-// MediaAsset adalah file media yang bisa dikirim otomatis oleh AI via directive [[SEND_MEDIA:id]].
+// MediaAsset adalah file media yang bisa dikirim otomatis oleh AI via directive:
+//   [[SEND_MEDIA:ID]]       — kirim berdasarkan ID numerik
+//   [[SEND_MEDIA:label]]    — kirim berdasarkan label (cocokkan TriggerKeys)
+//   [[SEND_MEDIA:label1,label2]] — kirim beberapa media sekaligus (urutan: gambar dulu, lalu teks)
+//
 // Tabel: media_assets
 type MediaAsset struct {
 	ID          uint      `gorm:"primaryKey" json:"id"`
@@ -13,9 +17,11 @@ type MediaAsset struct {
 	MediaType   string    `gorm:"size:20" json:"media_type"`    // image, video, document
 	MimeType    string    `gorm:"size:100" json:"mime_type"`
 	FilePath    string    `gorm:"size:500" json:"file_path"`    // path file di disk
-	Caption     string    `gorm:"type:text" json:"caption"`     // caption default
+	Caption     string    `gorm:"type:text" json:"caption"`     // caption default (bisa dikosongkan; kalau kosong hanya kirim media)
 	FileSize    int64     `json:"file_size"`
-	TriggerKeys string    `gorm:"size:500" json:"trigger_keys"` // kata kunci pemicu (pisah koma)
+	Label       string    `gorm:"size:100;index" json:"label"`  // label unik untuk lookup (contoh: "katalog dtf", "video uv")
+	TriggerKeys string    `gorm:"size:500" json:"trigger_keys"` // kata kunci pemicu (pisah koma) — dipakai untuk [[SEND_MEDIA:label]]
+	SortOrder   int       `gorm:"default:0" json:"sort_order"`  // urutan pengiriman (makin kecil makin dulu)
 	IsActive    bool      `gorm:"default:true" json:"is_active"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`

@@ -27,7 +27,7 @@ func ListMediaAssets(c *gin.Context) {
 	c.JSON(200, gin.H{"success": true, "data": assets})
 }
 
-// UploadMediaAsset upload file media untuk digunakan AI via directive [[SEND_MEDIA:id]]
+// UploadMediaAsset upload file media untuk digunakan AI via directive [[SEND_MEDIA:label]] atau [[SEND_MEDIA:id]].
 // POST /api/agents/:id/media-assets (multipart form)
 func UploadMediaAsset(c *gin.Context) {
 	id, ok := resolveAgent(c)
@@ -38,6 +38,7 @@ func UploadMediaAsset(c *gin.Context) {
 	name := strings.TrimSpace(c.PostForm("name"))
 	caption := strings.TrimSpace(c.PostForm("caption"))
 	triggerKeys := strings.TrimSpace(c.PostForm("trigger_keys"))
+	label := strings.TrimSpace(c.PostForm("label"))
 
 	fh, err := c.FormFile("file")
 	if err != nil {
@@ -101,6 +102,7 @@ func UploadMediaAsset(c *gin.Context) {
 		FilePath:    savedPath,
 		Caption:     caption,
 		FileSize:    int64(len(data)),
+		Label:       label,
 		TriggerKeys: triggerKeys,
 		IsActive:    true,
 		CreatedAt:   time.Now(),

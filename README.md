@@ -1,87 +1,297 @@
-# SlaluDiskon | SlaluDiskon
+# CRM Chatbot — WhatsApp AI Assistant
 
-SlaluDiskon — platform WhatsApp untuk bisnis: auto-reply AI berbasis knowledge base,
-inbox multi-agent, blast/broadcast dengan pengaman anti-blokir, CRM, jadwal, status, dan lainnya.
+Platform WhatsApp untuk bisnis: auto-reply AI, inbox multi-agent, broadcast, CRM, ongkir realtime, dan integrasi REST API.
 
-## Auto-reply AI
-- Balas pesan WhatsApp otomatis dengan AI.
-- **Satu pintu OpenRouter**: satu API key untuk chat, persona, ekstraksi closing, dan embedding.
-- **Knowledge base**: isi tanya-jawab manual, generate otomatis dengan AI, atau impor.
-- **Web crawler**: latih AI dari isi website (crawl → pilih halaman → train).
-- **Semantic search** via embedding; model dipilih dari katalog OpenRouter di dashboard dan dapat diganti tanpa edit `.env`.
-- Pilihan **tone**: ramah, formal, santai, persuasif.
-- **Handoff**: alihkan percakapan ke manusia bila perlu.
+---
 
-## Blast / Broadcast
-- Kirim pesan massal ke daftar nomor dengan **teks + lampiran** (gambar/video/dokumen).
-- **Jadwal blast** ke tanggal & jam tertentu.
-- **Blast ke grup**: post satu pesan ke banyak grup sekaligus (terjadwal).
-- **Personalisasi** `{nama}` per penerima.
-- Ambil penerima dari: pernah chat, kontak WA, anggota grup, atau label.
-- **Cek nomor terdaftar WhatsApp** sebelum kirim, untuk membuang nomor tidak aktif.
+## Tech Stack
 
-### Pengaman anti-blokir
-- **Jeda acak** antar pesan + **istirahat berkala** agar pola kirim tidak seperti bot.
-- **Humanized typing** (indikator "mengetik…").
-- **Opt-out otomatis**: kontak yang balas STOP/BERHENTI dilewati.
-- **Consent tracking** per kategori pesan + **risk level** sebelum blast.
-- Lanjut otomatis bila server restart; jeda otomatis bila WhatsApp membatasi.
+| Layer | Teknologi |
+|-------|-----------|
+| Backend | Go 1.25 (Gin, GORM) |
+| Frontend | React 18 + TypeScript (Vite) |
+| Database | MySQL 8 (produksi) / SQLite (development) |
+| WhatsApp | whatsmeow (Multi-Device, Go-native) |
+| AI Chat | DeepSeek / OpenRouter |
+| AI Vision | OpenRouter |
+| Shipping | Mengantar API (JNE, JT) |
 
-## Manajemen grup (Anti-Spam)
-- Moderasi grup: deteksi link/nomor/kata terlarang & flood.
-- Aksi: hapus pesan, tandai untuk dikeluarkan, atau auto-kick (butuh bot admin).
-- Log audit tiap tindakan moderasi.
+---
 
-## CRM & kontak
-- Simpan kontak, sinkronkan label WhatsApp, beri tag, dan impor massal.
-- Pipeline CRM: Baru, Cold, Warm, Hot, Pelanggan, dan Tidak potensial.
-- Riwayat chat & analitik percakapan.
-- Follow-up otomatis bertahap (multi-step).
-- Formulir closing & pencatatan order; cek ongkir (opsional).
+## Quick Start
 
-## Integrasi & tracking
-- **Meta Conversions API (CAPI)**: kirim event konversi ke Meta (rahasia dienkripsi at-rest).
-- Google Sheets (opsional).
+### Prerequisites
 
-## Multi-agent
-- Kelola beberapa nomor/agent WhatsApp dalam satu dashboard.
+- Go 1.25+
+- Node.js 20+
+- MySQL 8 (opsional; SQLite otomatis dipakai jika MySQL tidak tersedia)
 
-## Development lokal
-
-Panduan instalasi untuk pembeli:
-- PDF singkat: [`docs/PANDUAN-INSTALASI.pdf`](docs/PANDUAN-INSTALASI.pdf)
-- Detail teks: [`docs/INSTALL-LOCAL.md`](docs/INSTALL-LOCAL.md)
-
-### Satu perintah (macOS, Windows, Linux)
-
-Setelah dependency terpasang (`npm run setup`) dan file `.env` siap:
+### Setup
 
 ```bash
+# 1. Clone
+git clone https://github.com/Rzkyjlnsyh/CRM-Chatbot-V3.git
+cd CRM-Chatbot-V3
+
+# 2. Install dependencies
+npm run setup
+
+# 3. Konfigurasi environment
+cp .env.example .env
+# Edit .env — minimal isi:
+#   DEEPSEEK_API_KEY=sk-...          (untuk AI chat)
+#   MENGANTAR_API_KEY=API-...        (untuk cek ongkir)
+#   JWT_SECRET=string_random_32_char
+#   SUPERADMIN_USERNAME=admin
+#   SUPERADMIN_PASSWORD=min_12_char
+
+# 4. Jalankan
 npm run dev
 ```
 
-Perintah yang sama di semua OS. Alternatif:
-
-| OS | Perintah |
-|----|----------|
-| Semua | `npm run dev` atau `node scripts/dev.mjs` |
-| macOS / Linux | `./scripts/dev.sh` |
-| Windows (CMD) | `scripts\dev.bat` |
-| Windows (PowerShell) | `powershell -File scripts\dev.ps1` |
-
-Launcher akan:
-
-- Menjalankan **frontend** Vite di `http://127.0.0.1:5173` (hot reload)
-- Menjalankan **backend** dengan Air di `http://127.0.0.1:3030` (auto rebuild Go)
-- Menginstal Air otomatis bila belum ada
-- Menolak start bila port `3030` / `5173` masih dipakai
-
-Tekan `Ctrl+C` untuk menghentikan keduanya.
-
-## Keamanan & operasional
-- Login admin dengan password ter-hash (bcrypt) + throttle/lockout.
-- JWT untuk sesi; rahasia sensitif dienkripsi di database.
-- Sistem lisensi (aktivasi + heartbeat + grace offline).
+Dashboard: **http://localhost:5173**  
+API: **http://localhost:3030**
 
 ---
-Produk **SlaluDiskon | SlaluDiskon**. Penggunaan tunduk pada [EULA](docs/EULA.md) & [Disclaimer](docs/DISCLAIMER.md). **Wajib dibaca.**
+
+## Production Deployment
+
+### Build
+
+```bash
+# Backend binary
+go build -ldflags "-X wa-assistant/backend/license.DevMode=false" -o slaludiskon ./backend
+
+# Frontend static
+cd frontend && npm run build
+```
+
+### Systemd Service
+
+```ini
+[Unit]
+Description=SlaluDiskon
+After=network.target mysql.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/slaludiskon
+ExecStart=/opt/slaludiskon/slaludiskon
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### Nginx Reverse Proxy
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name slaludiskon.com;
+
+    location / {
+        root /var/www/html;
+        try_files $uri /index.html;
+    }
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:3030;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+```
+
+---
+
+## Environment Variables
+
+### Wajib
+
+| Variable | Keterangan |
+|----------|-----------|
+| `JWT_SECRET` | Secret key JWT (min 32 karakter random) |
+| `SUPERADMIN_USERNAME` | Username admin pertama |
+| `SUPERADMIN_PASSWORD` | Password admin pertama (min 12 karakter) |
+
+### AI
+
+| Variable | Keterangan |
+|----------|-----------|
+| `DEEPSEEK_API_KEY` | API key DeepSeek untuk chat AI |
+| `OPENROUTER_API_KEY` | API key OpenRouter (fallback + vision) |
+
+### Shipping
+
+| Variable | Keterangan |
+|----------|-----------|
+| `MENGANTAR_API_KEY` | API key Mengantar untuk cek ongkir |
+| `MENGANTAR_ORIGIN_AUTOFILL_ID` | ID alamat asal di Mengantar |
+| `SHIPPING_TRANSFER_DISCOUNT` | Diskon ongkir untuk transfer (default: 3000) |
+
+### Database
+
+| Variable | Default | Keterangan |
+|----------|---------|-----------|
+| `DB_HOST` | `localhost` | Host MySQL |
+| `DB_PORT` | `3306` | Port MySQL |
+| `DB_USER` | `root` | User MySQL |
+| `DB_PASS` | _(kosong)_ | Password MySQL |
+| `DB_NAME` | `wa_assistant` | Nama database |
+| `DB_PATH` | `./wa-assistant.db` | Path SQLite (fallback) |
+
+---
+
+## Arsitektur
+
+```
+WhatsApp Cloud
+     │
+     ▼
+┌──────────┐     ┌─────────────┐     ┌──────────┐
+│ whatsmeow │────▶│  Agent      │────▶│ DeepSeek  │
+│ (WebSocket)│    │  Handler    │     │   API     │
+└──────────┘     └──────┬──────┘     └──────────┘
+                        │
+              ┌─────────┼─────────┐
+              ▼         ▼         ▼
+        ┌─────────┐ ┌───────┐ ┌──────────┐
+        │ Persona │ │  RAG  │ │ Shipping │
+        │ (Prompt)│ │ (FAQ) │ │ (Ongkir) │
+        └─────────┘ └───────┘ └──────────┘
+                        │
+                        ▼
+              ┌─────────────────┐
+              │   System Prompt │
+              │   + Directives  │
+              └────────┬────────┘
+                       ▼
+              ┌─────────────────┐
+              │  Response Parse │
+              │  (Directives)   │
+              └────────┬────────┘
+                       ▼
+              ┌─────────────────┐
+              │  WhatsApp Send  │
+              └─────────────────┘
+```
+
+### Directive System
+
+AI berkomunikasi dengan sistem melalui token yang di-parse backend:
+
+| Directive | Aksi |
+|-----------|------|
+| `[[SEND_MEDIA:label]]` | Kirim media (gambar/video katalog) |
+| `[[LABEL:nama]]` | Label kontak WhatsApp |
+| `[[START_PRODUCT:ID]]` | Buka form checkout produk |
+| `[[ESCALATE]]` | Handoff ke CS manusia |
+
+---
+
+## Fitur
+
+### AI Chat
+- Persona-based prompting (satu agent = satu persona)
+- Knowledge base dengan semantic search (RAG)
+- Anti-hallucination grounding
+- Multi-model fallback chain
+
+### Inbox
+- Real-time chat monitoring
+- Balas manual dari dashboard
+- AI auto-reply dengan toggle on/off
+- Cursor pagination untuk chat panjang
+
+### Broadcast
+- Kirim massal dengan jeda acak (anti-blokir)
+- Rotasi multi-nomor
+- Personalisasi `{nama}`
+- Jadwal broadcast
+- Opt-out otomatis
+
+### CRM
+- Pipeline lead: New → Cold → Warm → Hot → Customer
+- Label WhatsApp sync (dua arah)
+- Google Sheets export
+- Follow-up bertahap
+
+### Shipping
+- Cek ongkir realtime (Mengantar API)
+- JNE prioritas, JT fallback
+- Auto city detection dari chat
+- Diskon ongkir transfer
+
+### REST API
+- 30+ endpoint dengan API key per-agent
+- Webhook realtime (message received, image analyzed)
+- Dokumentasi interaktif di dashboard
+
+---
+
+## Development
+
+### Struktur Projekt
+
+```
+backend/
+  cmd/          Entry point alternatif
+  config/       Env loader
+  database/     DB init + migrasi
+  handlers/     HTTP handler (50+ endpoint)
+  license/      Verifikasi lisensi
+  models/       GORM models
+  services/     AI, WA, shipping, embedding
+
+frontend/
+  src/
+    components/  UI components
+    pages/       Halaman (Dashboard, Login)
+    services/    API client
+    hooks.ts     React Query hooks
+    types.ts     TypeScript types
+
+docs/           Dokumentasi tambahan
+```
+
+### Menambah Agent Baru
+
+1. Dashboard → Agents → Create
+2. Isi nama + persona
+3. Scan QR untuk konek WhatsApp
+4. AI otomatis aktif dengan persona tersebut
+
+### Menambah Produk
+
+1. Dashboard → Products → Create
+2. Isi nama, harga, deskripsi, gambar
+3. AI akan otomatis menyebutkan produk saat relevan
+
+### Custom Persona
+
+Persona ditulis dalam bahasa natural. Contoh struktur:
+
+```
+Kamu adalah [nama], CS dari [bisnis].
+Produk: [produk] — Rp [harga]/paket.
+Alur: 1) Opening, 2) Gali data, 3) Rekap.
+Aturan: [daftar aturan].
+```
+
+---
+
+## Lisensi
+
+Produk berlisensi. Penggunaan tunduk pada EULA dan Disclaimer di folder `docs/`.
+
+---
+
+## Kontributor
+
+- **Backend**: Go, whatsmeow, GORM, DeepSeek integration
+- **Frontend**: React, TypeScript, MUI, Vite
+- **Shipping**: Mengantar API integration
+- **AI Pipeline**: Persona injection, RAG, grounding, directives

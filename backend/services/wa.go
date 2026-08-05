@@ -32,8 +32,9 @@ import (
 )
 
 func init() {
-	// Register modernc.org/sqlite under the "sqlite3" driver name
-	// (whatsmeow's sqlstore uses sql.Open("sqlite3", dsn))
+	// Register modernc.org/sqlite under the "sqlite3" driver name (once)
+	// Skip if already registered (e.g., by GORM's sqlite driver)
+	defer func() { recover() }()
 	sql.Register("sqlite3", &sqlite.Driver{})
 }
 
@@ -1110,6 +1111,52 @@ func (w *waInstance) SyncLabels(ctx context.Context) ([]WALabelSnapshot, []WALab
 		return contactList[i].LabelID < contactList[j].LabelID
 	})
 	return labelList, contactList, nil
+}
+
+// ApplyLabel menerapkan label WhatsApp ke kontak dan menyinkronkan ke server WhatsApp.
+// Dua arah: DB lokal langsung diupdate + WhatsApp server menerima patch app-state.
+func (w *waInstance) ApplyLabel(sender, labelID string, labeled bool) error {
+	w.mu.Lock()
+	client := w.client
+	w.mu.Unlock()
+	if client == nil || !client.IsConnected() || !client.IsLoggedIn() {
+		return errors.New("WhatsApp belum tersambung")
+	}
+
+	// Parse nomor ke JID
+	jid, err := parseJIDForWA(sender)
+	if err != nil {
+		return fmt.Errorf("JID tidak valid: %w", err)
+	}
+
+	// Kirim patch app-state ke WhatsApp
+	patch := appstate.BuildLabelChat(jid, labelID, labeled)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	if err := client.SendAppState(ctx, patch); err != nil {
+		return fmt.Errorf("gagal kirim label ke WhatsApp: %w", err)
+	}
+
+	// Update DB lokal (biar UI langsung reflect)
+	if labeled {
+		database.DB.Where(models.ChatLabel{AgentID: w.agentID, LabelID: labelID, Sender: sender}).FirstOrCreate(&models.ChatLabel{})
+	} else {
+		database.DB.Where("agent_id = ? AND label_id = ? AND sender = ?", w.agentID, labelID, sender).Delete(&models.ChatLabel{})
+	}
+
+	log.Printf("WA agent %d: label '%s' %s ke %s (synced ke WhatsApp)", w.agentID, labelID, map[bool]string{true: "applied", false: "removed"}[labeled], sender)
+	return nil
+}
+
+// parseJIDForWA mengonversi nomor HP ke types.JID WhatsApp.
+func parseJIDForWA(number string) (types.JID, error) {
+	number = strings.TrimSpace(number)
+	if number == "" {
+		return types.JID{}, fmt.Errorf("nomor kosong")
+	}
+	// Gunakan NewJID dengan user dan server terpisah
+	return types.NewJID(number, types.DefaultUserServer), nil
 }
 
 func phoneNumberForJID(ctx context.Context, client *whatsmeow.Client, jid types.JID) (string, error) {

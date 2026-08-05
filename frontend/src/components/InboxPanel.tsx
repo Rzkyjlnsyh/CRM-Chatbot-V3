@@ -29,7 +29,7 @@ import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import {
   useContacts, useConversation, useConversationBrief, useRefreshConversationBrief,
   useSendMessage, useSendMedia, postAgentTyping, useRevokeMessage, useResumeBot, useReanalyzeImage,
-  useDeleteInboxConversation,
+  useDeleteInboxConversation, useLoadOlderMessages,
 } from '../hooks';
 import TemplatePicker from './TemplatePicker';
 import { swalConfirm, swalToast } from '../services/swal';
@@ -668,6 +668,10 @@ const MessageThread = memo(function MessageThread({
   showTyping,
   chatRef,
   bottomRef,
+  hasMore,
+  totalCount,
+  onLoadOlder,
+  loadingOlder,
 }: {
   messages: ChatMsg[];
   agentId: number;
@@ -681,7 +685,12 @@ const MessageThread = memo(function MessageThread({
   showTyping: boolean;
   chatRef: RefObject<HTMLDivElement | null>;
   bottomRef: RefObject<HTMLDivElement | null>;
+  hasMore?: boolean;
+  totalCount?: number;
+  onLoadOlder?: () => void;
+  loadingOlder?: boolean;
 }) {
+  const oldestId = messages.length > 0 ? messages[0].id : 0;
   return (
     <Box
       ref={chatRef}
@@ -696,6 +705,28 @@ const MessageThread = memo(function MessageThread({
         overscrollBehavior: 'contain',
       }}
     >
+      {/* Load Older Messages button */}
+      {hasMore && onLoadOlder && (
+        <Box sx={{ textAlign: 'center', py: 0.5 }}>
+          <Button
+            size="small"
+            variant="text"
+            onClick={onLoadOlder}
+            disabled={loadingOlder}
+            startIcon={loadingOlder ? <CircularProgress size={14} /> : <ExpandMoreIcon />}
+            sx={{
+              fontSize: 11.5,
+              color: WA.greenDark,
+              textTransform: 'none',
+              borderRadius: 8,
+              px: 2,
+              '&:hover': { bgcolor: alpha(WA.green, 0.08) },
+            }}
+          >
+            {loadingOlder ? 'Memuat pesan lama…' : `Pesan lama (total ${(totalCount || messages.length).toLocaleString()})`}
+          </Button>
+        </Box>
+      )}
       {messages.map((m) => (
         <MessageBlock
           key={m.id}
@@ -979,6 +1010,7 @@ export default function InboxPanel({
   const [search, setSearch] = useState('');
 
   const { data: convo, isFetching: convoFetching } = useConversation(agentId, sender);
+  const loadOlderMsgs = useLoadOlderMessages(agentId, sender);
   const briefQ = useConversationBrief(agentId, sender);
   const refreshBrief = useRefreshConversationBrief(agentId);
   const revokeMsg = useRevokeMessage(agentId);
@@ -1081,6 +1113,13 @@ export default function InboxPanel({
   }, [sender]);
 
   const busy = sendMsg.isPending || sendMedia.isPending;
+
+  const handleLoadOlder = useCallback(() => {
+    const msgs = convo?.data;
+    if (!msgs || msgs.length === 0) return;
+    const oldestId = msgs[0].id;
+    loadOlderMsgs.mutate(oldestId);
+  }, [convo?.data, loadOlderMsgs]);
 
   const selectContact = useCallback((s: string) => {
     setSender(s);
@@ -1456,6 +1495,10 @@ export default function InboxPanel({
                 showTyping={busy}
                 chatRef={chatRef}
                 bottomRef={bottomRef}
+                hasMore={convo?.has_more}
+                totalCount={convo?.total}
+                onLoadOlder={handleLoadOlder}
+                loadingOlder={loadOlderMsgs.isPending}
               />
 
               <ChatComposer
@@ -1567,7 +1610,7 @@ export default function InboxPanel({
             />
             <InfoRow
               label="Pesan di thread"
-              value={convo?.data ? `${convo.data.length} pesan (terbaru)` : '—'}
+              value={convo?.total ? `${convo.data?.length || 0} dimuat dari ${convo.total} total pesan` : convo?.data ? `${convo.data.length} pesan` : '—'}
             />
             <InfoRow
               label="Aktivitas terakhir"

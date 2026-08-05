@@ -14,11 +14,13 @@ import (
 // apiConfigKeys = semua key AppSetting yang dipakai untuk konfigurasi API.
 var apiConfigKeys = []string{
 	"api_key", "api_model", "vision_model", "embedding_model",
+	"deepseek_api_key", "chat_provider",
 }
 
 // sensitiveAPIKeys = key yang disimpan terenkripsi at-rest & disamarkan saat ditampilkan.
 var sensitiveAPIKeys = map[string]bool{
-	"api_key": true,
+	"api_key":          true,
+	"deepseek_api_key": true,
 }
 
 // GetAPIConfig mengembalikan seluruh konfigurasi API (key sensitif disamarkan sebagian).

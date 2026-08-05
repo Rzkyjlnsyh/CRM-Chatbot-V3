@@ -41,7 +41,7 @@ export function useContacts(agentId: number) {
 }
 
 export function useConversation(agentId: number, sender: string) {
-  return useQuery<{ data: ChatMsg[]; needs_human: boolean; manual_pause_until?: string | null; media_token: string }>({
+  return useQuery<{ data: ChatMsg[]; needs_human: boolean; manual_pause_until?: string | null; media_token: string; has_more?: boolean; total?: number }>({
     queryKey: ['conversation', agentId, sender],
     queryFn: async () => (await api.get(`/agents/${agentId}/conversation`, { params: { sender } })).data,
     enabled: !!agentId && !!sender,
@@ -50,6 +50,30 @@ export function useConversation(agentId: number, sender: string) {
     refetchIntervalInBackground: false,
     staleTime: 2_500,
     placeholderData: (prev) => prev,
+  });
+}
+
+/** Load older messages (cursor pagination) — append ke conversation yang sudah ada. */
+export function useLoadOlderMessages(agentId: number, sender: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (beforeId: number) => {
+      const res = await api.get(`/agents/${agentId}/conversation`, { params: { sender, before_id: beforeId, limit: 100 } });
+      return res.data as { data: ChatMsg[]; has_more: boolean };
+    },
+    onSuccess: (result, _beforeId) => {
+      qc.setQueryData<{ data: ChatMsg[]; has_more?: boolean }>(['conversation', agentId, sender], (prev) => {
+        if (!prev) return { data: result.data, has_more: result.has_more };
+        // Merge: older messages di depan (karena result.data adalah asc: lama→baru)
+        const existingIds = new Set(prev.data.map((m: ChatMsg) => m.id));
+        const newMsgs = result.data.filter((m: ChatMsg) => !existingIds.has(m.id));
+        return {
+          ...prev,
+          data: [...newMsgs, ...prev.data],
+          has_more: result.has_more,
+        };
+      });
+    },
   });
 }
 

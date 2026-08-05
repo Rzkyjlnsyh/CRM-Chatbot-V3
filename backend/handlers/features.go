@@ -115,6 +115,9 @@ func TestChat(c *gin.Context) {
 	} else if formStart, ok := startAIFormFromFreeCollection(id, testAITurnSender, req.Message, routingText, reply); ok {
 		reply = formStart.reply
 	}
+	// Proses directive yang tidak mengubah alur percakapan
+	reply, _ = handleLabelDirective(id, testAITurnSender, reply)
+	reply, _ = handleBuatResiDirective(id, testAITurnSender, reply)
 	latencyMs := time.Since(start).Milliseconds()
 	logAITurn(id, testAITurnSender, req.Message, reply, model, knowledgeCount, usedShippingTool, escalate, turnError, latencyMs, trace)
 
@@ -216,8 +219,7 @@ func InboxContacts(c *gin.Context) {
 		) latest ON ch.id = latest.max_id
 		WHERE ch.agent_id = ?
 		ORDER BY ch.id DESC
-		LIMIT 100
-	`, id, id).Scan(&rows)
+		LIMIT 500`, id, id).Scan(&rows)
 
 	senders := make([]string, 0, len(rows))
 	for _, r := range rows {
@@ -329,6 +331,8 @@ func DeleteInboxConversation(c *gin.Context) {
 }
 
 // InboxConversation = seluruh percakapan dengan satu kontak.
+// Mendukung cursor pagination via query param `before_id` (ID pesan tertua yang sudah ditampilkan).
+// Response menyertakan `has_more: true` bila masih ada pesan lebih lama.
 func InboxConversation(c *gin.Context) {
 	id, ok := resolveAgent(c)
 	if !ok {
@@ -339,8 +343,33 @@ func InboxConversation(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "sender wajib"})
 		return
 	}
+
+	limit := 300 // default: tampung banyak percakapan
+	if l, err := strconv.Atoi(c.DefaultQuery("limit", "300")); err == nil && l > 0 && l <= 1000 {
+		limit = l
+	}
+
+	query := database.DB.Where("agent_id = ? AND sender = ?", id, sender).Order("created_at asc")
+
+	// Cursor pagination: jika ada before_id, ambil pesan SEBELUM ID tersebut
+	if beforeID := c.Query("before_id"); beforeID != "" {
+		if bid, err := strconv.Atoi(beforeID); err == nil && bid > 0 {
+			query = query.Where("id < ?", bid)
+		}
+	}
+
+	// Ambil 1 extra untuk deteksi has_more
 	var msgs []models.ChatHistory
-	database.DB.Where("agent_id = ? AND sender = ?", id, sender).Order("created_at asc").Limit(200).Find(&msgs)
+	query.Limit(limit + 1).Find(&msgs)
+
+	hasMore := len(msgs) > limit
+	if hasMore {
+		msgs = msgs[:limit] // kembalikan tepat `limit`, sisakan 1 sebagai sinyal
+	}
+
+	// Balik urutan: newest-first agar frontend bisa append older messages di atas
+	// Tapi data asli dari DB sudah asc (lama→baru), biarkan saja — frontend yang atur tampilan
+
 	var h int64
 	database.DB.Model(&models.Handoff{}).Where("agent_id = ? AND sender = ?", id, sender).Count(&h)
 	var contact models.Contact
@@ -349,7 +378,19 @@ func InboxConversation(c *gin.Context) {
 	if contact.ManualPauseUntil != nil && contact.ManualPauseUntil.After(time.Now()) {
 		pauseUntil = contact.ManualPauseUntil
 	}
-	c.JSON(200, gin.H{"data": msgs, "needs_human": h > 0, "manual_pause_until": pauseUntil, "media_token": issueMediaToken(currentTenantID(c))})
+
+	// Hitung total chat untuk info
+	var totalCount int64
+	database.DB.Model(&models.ChatHistory{}).Where("agent_id = ? AND sender = ?", id, sender).Count(&totalCount)
+
+	c.JSON(200, gin.H{
+		"data":               msgs,
+		"needs_human":        h > 0,
+		"manual_pause_until": pauseUntil,
+		"media_token":        issueMediaToken(currentTenantID(c)),
+		"has_more":           hasMore,
+		"total":              totalCount,
+	})
 }
 
 // ReanalyzeInboxImage menjalankan ulang vision pada media yang sudah tersimpan.

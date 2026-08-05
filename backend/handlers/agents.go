@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"wa-assistant/backend/config"
 	"wa-assistant/backend/database"
 	"wa-assistant/backend/models"
 	"wa-assistant/backend/services"
@@ -629,6 +630,17 @@ func processMessageLocked(agentID uint, sender types.JID, in services.IncomingMe
 		return
 	}
 
+	// 4d. Closing Inspector: cek apakah kontak sudah Closing (deal selesai).
+	// Jika iya, jangan mulai flow baru — acknowledge sebagai existing customer.
+	if closedLabel := getContactClosedLabel(agentID, num); closedLabel != "" {
+		closedReply := buildClosedContactReply(agent, num, in.Text, closedLabel)
+		if closedReply != "" {
+			markBeforeReply()
+			logRow(displayText, closedReply, send(closedReply))
+			return
+		}
+	}
+
 	// 6. Jawaban AI teks biasa.
 	var historyNewestFirst []models.ChatHistory
 	database.DB.Where("agent_id = ? AND sender = ?", agentID, num).
@@ -757,14 +769,20 @@ func processMessageLocked(agentID uint, sender types.JID, in services.IncomingMe
 		return
 	}
 	latencyMs := time.Since(turnStart).Milliseconds()
-	// Cek directive [[SEND_MEDIA:id]] — AI mau kirim media otomatis
+	// Cek directive [[SEND_MEDIA:id]] atau [[SEND_MEDIA:label]] — AI mau kirim media otomatis
 	if mediaReply, handled := handleSendMediaDirective(agentID, num, reply); handled {
 		markBeforeReply()
-		sendErr := sendChunked(agentID, sender, mediaReply.text, agent.AIReplyDelayMin, agent.AIReplyDelayMax, nil)
-		logRow(displayText, mediaReply.text, sendErr)
-		logAITurn(agentID, num, displayText, mediaReply.text, modelName, knowledgeCount, usedShippingTool, false, turnError, latencyMs, trace)
+		// Proses label directive (jika ada) sebelum/tanpa mengubah teks
+		reply, _ = handleLabelDirective(agentID, num, mediaReply.text)
+		sendErr := sendChunked(agentID, sender, reply, agent.AIReplyDelayMin, agent.AIReplyDelayMax, nil)
+		logRow(displayText, reply, sendErr)
+		logAITurn(agentID, num, displayText, reply, modelName, knowledgeCount, usedShippingTool, false, turnError, latencyMs, trace)
 		return
 	}
+	// Proses label directive (bersihkan [[LABEL:...]] dari balasan)
+	reply, _ = handleLabelDirective(agentID, num, reply)
+	// Proses auto-resi directive ([[BUAT_RESI:...]])
+	reply, _ = handleBuatResiDirective(agentID, num, reply)
 	reply = services.LinkifyWhatsApp(reply, agent.Number) // nomor WA jadi tautan klik (kecuali nomor sendiri)
 	markBeforeReply()
 	sendErr := sendChunked(agentID, sender, reply, agent.AIReplyDelayMin, agent.AIReplyDelayMax, func() bool {
@@ -1060,28 +1078,47 @@ func cleanShippingWord(w string) string {
 
 // maybeBuildShippingContext membangun konteks ongkir realtime untuk system prompt AI.
 // Menggunakan Mengantar API untuk search kota + cek ongkir (JNE & JT).
+// Menambahkan informasi diskon transfer jika ada.
 func maybeBuildShippingContext(agent models.Agent, msg string, history []models.ChatHistory) string {
 	// Cek apakah agent punya origin address configured (via PICKUP_AUTOFILL)
 	originAutofillID := strings.TrimSpace(agent.MengantarOriginAutofillID)
+	if originAutofillID == "" {
+		// Fallback: coba dari env
+		originAutofillID = config.Env("MENGANTAR_ORIGIN_AUTOFILL_ID", "")
+		log.Printf("[shipping] ENV origin autofill: %q", originAutofillID)
+	}
 	if originAutofillID == "" {
 		// Fallback: coba ambil dari alamat pertama di Mengantar
 		addrs, err := services.GetMyAddresses()
 		if err == nil && len(addrs) > 0 {
 			originAutofillID = addrs[0].PickupAutofill
+			// Auto-save ke agent biar next time nggak fetch lagi
+			agent.MengantarOriginAutofillID = originAutofillID
+			agent.MengantarOriginAddressID = addrs[0].ID
+			database.DB.Model(&agent).Updates(map[string]any{
+				"mengantar_origin_autofill_id": originAutofillID,
+				"mengantar_origin_address_id":  addrs[0].ID,
+			})
+			log.Printf("[shipping] Auto-config origin untuk agent %d: %s (%s)", agent.ID, addrs[0].PickupName, addrs[0].PickupCity)
 		}
 	}
 	if originAutofillID == "" {
+		log.Printf("[shipping] Origin autofill ID KOSONG — ongkir tidak tersedia")
 		return ""
 	}
 
 	hasIntent := detectShippingIntent(msg)
+	log.Printf("[shipping] msg=%q hasIntent=%v", msg, hasIntent)
 	destText := ""
 	if hasIntent {
 		destText = extractDestinationCity(msg)
+		log.Printf("[shipping] extracted destText=%q", destText)
 	} else {
 		if !lastReplyAskedShippingFollowup(history) {
+			log.Printf("[shipping] No intent, no followup → return empty")
 			return ""
 		}
+		log.Printf("[shipping] Followup mode, msg=%q", msg)
 		lower := strings.ToLower(msg)
 		for _, qw := range []string{"kenapa", "kok", "gimana", "bagaimana", "apa ", "apakah", "lama", "banget", "resp", "respon"} {
 			if strings.Contains(lower, qw) {
@@ -1105,25 +1142,58 @@ func maybeBuildShippingContext(agent models.Agent, msg string, history []models.
 	}
 
 	// Cari kota via Mengantar
+	log.Printf("[shipping] Searching address for: %q", destText)
 	addresses, err := services.SearchAddress(destText)
 	if err != nil || len(addresses) == 0 {
+		// Coba dengan prefix "kota" untuk pencarian lebih spesifik
+		if !strings.HasPrefix(strings.ToLower(destText), "kota ") && !strings.HasPrefix(strings.ToLower(destText), "kab ") {
+			altQuery := "kota " + destText
+			log.Printf("[shipping] Retrying with: %q", altQuery)
+			addresses, err = services.SearchAddress(altQuery)
+		}
+	}
+	if err != nil || len(addresses) == 0 {
+		log.Printf("[shipping] SearchAddress error=%v, len=%d", err, len(addresses))
 		if hasIntent {
 			return "\n\nONGKIR_NOTFOUND: Kota \"" + destText + "\" tidak ditemukan. JANGAN eskalasi. Bilang ke customer: \"Maaf kak, kota \"" + destText + "\" belum tersedia di sistem kami. Boleh sebutkan kota/kabupaten yang lebih spesifik ya.\""
 		}
 		return ""
 	}
 
+	// Filter: prioritas yang CITY_NAME mengandung destText (bukan cuma subdistrict)
+	// Jika ada exact city match, gunakan itu saja; jika tidak, tetap pakai hasil search
+	if len(addresses) > 5 {
+		var cityMatches []services.MengantarAddress
+		destLower := strings.ToLower(destText)
+		for _, a := range addresses {
+			if strings.Contains(strings.ToLower(a.CityName), destLower) {
+				cityMatches = append(cityMatches, a)
+			}
+		}
+		if len(cityMatches) > 0 && len(cityMatches) <= 5 {
+			addresses = cityMatches
+		} else if len(cityMatches) > 0 {
+			addresses = cityMatches[:5]
+		}
+	}
+
 	if len(addresses) > 1 {
+		// Masih ambiguous — batasi ke 5 teratas
+		if len(addresses) > 5 {
+			addresses = addresses[:5]
+		}
 		// Ambiguous
+		log.Printf("[shipping] AMBIGUOUS: %d results for %q", len(addresses), destText)
 		var sb strings.Builder
-		sb.WriteString("\n\nONGKIR_AMBIGUOUS:\nBeberapa kota ditemukan:\n")
+		sb.WriteString("\n\nONGKIR_AMBIGUOUS (OVERRIDE PERSONA — tampilkan daftar ini, JANGAN minta alamat dulu, JANGAN bilang 'sistem yang cek'):\n")
+		sb.WriteString("Daerah tujuan yang ditemukan:\n")
 		for i, a := range addresses {
 			if i >= 5 {
 				break
 			}
 			sb.WriteString(fmt.Sprintf("%d. %s, %s, %s (%s)\n", i+1, a.SubdistrictName, a.DistrictName, a.CityName, a.ProvinceName))
 		}
-		sb.WriteString("Tanyakan customer pilih yang mana (balas dengan nomor).\n")
+		sb.WriteString("TAMPILKAN daftar di atas ke customer. Tanya: 'Pilih yang mana ya bun? Balas nomornya saja 😊' JANGAN eskalasi.\n")
 		return sb.String()
 	}
 
@@ -1139,42 +1209,61 @@ func maybeBuildShippingContext(agent models.Agent, msg string, history []models.
 		weightKg = 0.1
 	}
 
-	// Cek ongkir JNE & JT
-	couriers := []string{"JNE", "JT"}
+	// Cek ongkir — PRIORITAS JNE, J&T hanya fallback jika JNE unsupported
 	var sb strings.Builder
 	sb.WriteString("\n\nONGKIR_REALTIME:\n")
-	sb.WriteString(fmt.Sprintf("Kota asal ID: %s\n", originAutofillID))
+	sb.WriteString(fmt.Sprintf("Kota asal: %s, %s, %s\n", addr.CityName, addr.ProvinceName, addr.ZipCode))
 	sb.WriteString(fmt.Sprintf("Tujuan: %s, %s, %s, %s (%s)\n", addr.SubdistrictName, addr.DistrictName, addr.CityName, addr.ProvinceName, addr.ZipCode))
 	sb.WriteString(fmt.Sprintf("Berat: %dg (%.1f kg)\n", weight, weightKg))
 
 	hasResults := false
-	for _, courier := range couriers {
-		est, err := services.EstimateShipping(originAutofillID, destID, courier, weightKg, 0)
-		if err != nil || est.Unsupported {
-			continue
-		}
+	jneUnsupported := false
+
+	// 1. Coba JNE dulu (prioritas utama)
+	jneEst, jneErr := services.EstimateShipping(originAutofillID, destID, "JNE", weightKg, 0)
+	if jneErr == nil && !jneEst.Unsupported {
 		hasResults = true
-		price := est.EstimatedSpecialPrice
+		price := jneEst.EstimatedSpecialPrice
 		if price <= 0 {
-			price = est.EstimatedPrice
+			price = jneEst.EstimatedPrice
 		}
-		eta := est.EstimatedDate
+		eta := jneEst.EstimatedDate
 		if eta == "" {
-			eta = est.EstimateDelivery
-		}
-		discountNote := ""
-		if est.Discount > 0 {
-			discountNote = fmt.Sprintf(" (diskon Rp%s, normal Rp%s)", formatRupiah(est.Discount), formatRupiah(est.EstimatedPrice))
+			eta = jneEst.EstimateDelivery
 		}
 		codNote := ""
-		if est.UnsupportedCod {
+		if jneEst.UnsupportedCod {
 			codNote = " [COD TIDAK TERSEDIA]"
 		}
-		sb.WriteString(fmt.Sprintf("%s: Rp%s%s estimasi %s%s\n", courier, formatRupiah(price), discountNote, eta, codNote))
+		sb.WriteString(fmt.Sprintf("\nJNE (REG): Rp%s estimasi %s%s\n", formatRupiah(price), eta, codNote))
+	} else {
+		jneUnsupported = true
+		log.Printf("[shipping] JNE unsupported untuk %s: err=%v", destText, jneErr)
+	}
+
+	// 2. J&T sebagai fallback (hanya jika JNE unsupported atau error)
+	if jneUnsupported || !hasResults {
+		jtEst, jtErr := services.EstimateShipping(originAutofillID, destID, "JT", weightKg, 0)
+		if jtErr == nil && !jtEst.Unsupported {
+			hasResults = true
+			price := jtEst.EstimatedSpecialPrice
+			if price <= 0 {
+				price = jtEst.EstimatedPrice
+			}
+			eta := jtEst.EstimatedDate
+			if eta == "" {
+				eta = jtEst.EstimateDelivery
+			}
+			codNote := ""
+			if jtEst.UnsupportedCod {
+				codNote = " [COD TIDAK TERSEDIA]"
+			}
+			sb.WriteString(fmt.Sprintf("\nJ&T (REG): Rp%s estimasi %s%s (JNE tidak tersedia di tujuan ini)\n", formatRupiah(price), eta, codNote))
+		}
 	}
 
 	if !hasResults {
-		// Coba public endpoint
+		// Coba public endpoint sebagai last resort
 		allEst, err := services.EstimateAllPublic(originAutofillID, destID, weightKg, 0)
 		if err == nil {
 			for courier, est := range allEst {
@@ -1198,7 +1287,17 @@ func maybeBuildShippingContext(agent models.Agent, msg string, history []models.
 		return "\n\nONGKIR_EMPTY: Tidak ada tarif tersedia untuk tujuan ini via JNE/JT. JANGAN eskalasi. Bilang ke customer: \"Maaf kak, ongkir ke " + addr.CityName + " belum tersedia. Boleh kirim detail pesanan + alamat lengkap, nanti kami bantu cek manual ya.\""
 	}
 
-	sb.WriteString("\nAturan: data ONGKIR_REALTIME ini adalah sumber resmi untuk menjawab pertanyaan ongkir. Jawab langsung dengan daftar tarif di atas, jangan mengarang ekspedisi atau harga lain, jangan eskalasi, dan sebutkan bahwa tarif adalah estimasi dan bisa berubah. Jika customer tanya ongkir COD, sebutkan juga status ketersediaan COD.")
+	// Tambahkan info diskon transfer
+	transferDiscount := config.EnvInt("SHIPPING_TRANSFER_DISCOUNT", 3000)
+	if transferDiscount > 0 {
+		sb.WriteString(fmt.Sprintf("\nDISKON TRANSFER: Customer yang pilih pembayaran TRANSFER dapat potongan ongkir Rp%s. Langsung kurangi TOTAL ongkir di rekap, jangan tampilkan sebagai baris terpisah.\n", formatRupiah(transferDiscount)))
+	}
+
+	sb.WriteString("\nOVERRIDE PERSONA: data ONGKIR_REALTIME ini adalah sumber RESMI dan FINAL. EKSPEDISI UTAMA adalah JNE (REG). J&T hanya dipakai jika JNE tidak tersedia. TAMPILKAN tarif LANGSUNG ke customer — JANGAN bilang 'akan dicek' atau 'sistem yang cek'. Jangan mengarang ekspedisi atau harga lain. Sebutkan kurir yang digunakan. Jika customer tanya ongkir COD, sebutkan status ketersediaan COD.\n")
+
+	// Info auto-resi: AI bisa menggunakan [[BUAT_RESI:...]] untuk membuat resi otomatis
+	sb.WriteString(fmt.Sprintf("\n\nBUAT RESI OTOMATIS: Jika customer sudah deal dan semua data lengkap (nama, alamat, no HP), gunakan directive [[BUAT_RESI:nama|no_hp|alamat|kecamatan_kota|isi_paket|nilai_barang|courier]]. Contoh: [[BUAT_RESI:Budi|08123456789|Jl. Mawar 5, Bandung|Coblong, Bandung|Label Nama DTF 50pcs|39000|JNE]]. Courier hanya JNE atau JT. Sistem akan otomatis membuat resi dan mengirim notif ke customer.\n"))
+	sb.WriteString(fmt.Sprintf("Origin address ID: %s\n", originAutofillID))
 	return sb.String()
 }
 
@@ -1555,17 +1654,23 @@ func DeleteAgent(c *gin.Context) {
 }
 
 // ---------------------------------------------------------------------------
-// Media Directive: [[SEND_MEDIA:id]]
-// Memungkinkan AI mengirim media (gambar/video/dokumen) secara otomatis.
-// Format di system prompt: "Untuk mengirim gambar produk, gunakan [[SEND_MEDIA:ID]]"
+// Directive System: AI dapat memicu aksi via token di balasannya.
+//
+// Format directive:
+//   [[SEND_MEDIA:ID]]              — kirim media berdasarkan ID numerik
+//   [[SEND_MEDIA:label]]           — kirim media berdasarkan label/trigger key
+//   [[SEND_MEDIA:label1,label2]]   — kirim beberapa media sekaligus
+//   [[LABEL:nama_label]]           — beri label WhatsApp ke kontak
+//   [[LABEL:label1,label2]]        — beri beberapa label sekaligus
 // ---------------------------------------------------------------------------
 
 type mediaDirectiveResult struct {
 	text string // teks balasan (caption + sisa teks)
 }
 
-// handleSendMediaDirective mendeteksi dan mengeksekusi directive [[SEND_MEDIA:id]] di balasan AI.
-// Mengembalikan (hasil, true) bila directive ditemukan dan diproses.
+// handleSendMediaDirective mendeteksi dan mengeksekusi directive [[SEND_MEDIA:...]].
+// Mendukung: ID numerik, label tunggal, atau multi-label (dipisah koma).
+// Multi-label: kirim gambar/video dulu, lalu teks caption terakhir.
 func handleSendMediaDirective(agentID uint, toNumber, reply string) (mediaDirectiveResult, bool) {
 	const prefix = "[[SEND_MEDIA:"
 	const suffix = "]]"
@@ -1574,7 +1679,7 @@ func handleSendMediaDirective(agentID uint, toNumber, reply string) (mediaDirect
 		return mediaDirectiveResult{}, false
 	}
 
-	// Parse directive: [[SEND_MEDIA:123]]
+	// Parse directive: [[SEND_MEDIA:value]]
 	start := strings.Index(reply, prefix)
 	end := strings.Index(reply[start:], suffix)
 	if end < 0 {
@@ -1582,47 +1687,133 @@ func handleSendMediaDirective(agentID uint, toNumber, reply string) (mediaDirect
 	}
 	end += start
 
-	idStr := reply[start+len(prefix) : end]
-	mediaID, err := strconv.ParseUint(strings.TrimSpace(idStr), 10, 64)
-	if err != nil {
-		log.Printf("[media-directive] Invalid ID: %s", idStr)
+	value := strings.TrimSpace(reply[start+len(prefix) : end])
+
+	// Ambil teks di luar directive
+	textBefore := strings.TrimSpace(reply[:start])
+	textAfter := strings.TrimSpace(reply[end+len(suffix):])
+
+	// Coba parse sebagai ID numerik dulu
+	if mediaID, err := strconv.ParseUint(value, 10, 64); err == nil {
+		return sendMediaByID(agentID, toNumber, mediaID, textBefore, textAfter)
+	}
+
+	// Parse sebagai label (bisa multi-label dipisah koma)
+	labels := parseMediaLabels(value)
+	if len(labels) == 0 {
+		log.Printf("[media-directive] Label tidak valid: %s", value)
 		return mediaDirectiveResult{}, false
 	}
 
-	// Ambil media dari DB
+	return sendMediaByLabels(agentID, toNumber, labels, textBefore, textAfter)
+}
+
+// parseMediaLabels memecah string "katalog dtf,video dtf" menjadi slice label.
+func parseMediaLabels(raw string) []string {
+	parts := strings.Split(raw, ",")
+	var labels []string
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			labels = append(labels, p)
+		}
+	}
+	return labels
+}
+
+// sendMediaByID mengirim satu media berdasarkan ID numerik.
+func sendMediaByID(agentID uint, toNumber string, mediaID uint64, textBefore, textAfter string) (mediaDirectiveResult, bool) {
 	var media models.MediaAsset
 	if database.DB.Where("id = ? AND agent_id = ? AND is_active = ?", mediaID, agentID, true).First(&media).Error != nil {
 		log.Printf("[media-directive] Media #%d tidak ditemukan untuk agent %d", mediaID, agentID)
 		return mediaDirectiveResult{}, false
 	}
 
-	// Baca file
+	if err := sendSingleMedia(agentID, toNumber, media); err != nil {
+		log.Printf("[media-directive] Gagal kirim media #%d: %v", mediaID, err)
+	}
+
+	finalText := buildFinalText(textBefore, textAfter, media.Caption)
+	return mediaDirectiveResult{text: finalText}, true
+}
+
+// sendMediaByLabels mencari dan mengirim media berdasarkan label (cocokkan dengan TriggerKeys atau Label field).
+// Multi-label: semua media dikirim berurutan (gambar/video dulu), lalu teks dari textBefore/textAfter.
+func sendMediaByLabels(agentID uint, toNumber string, labels []string, textBefore, textAfter string) (mediaDirectiveResult, bool) {
+	var allMedia []models.MediaAsset
+
+	for _, label := range labels {
+		// Cari media yang cocok: label persis di field Label, atau substring di TriggerKeys
+		var matches []models.MediaAsset
+		database.DB.Where(
+			"agent_id = ? AND is_active = ? AND (label = ? OR trigger_keys LIKE ?)",
+			agentID, true, label, "%"+label+"%",
+		).Order("sort_order ASC, id ASC").Find(&matches)
+
+		if len(matches) == 0 {
+			// Coba substring match lebih longgar
+			database.DB.Where(
+				"agent_id = ? AND is_active = ? AND (label LIKE ? OR trigger_keys LIKE ?)",
+				agentID, true, "%"+label+"%", "%"+label+"%",
+			).Order("sort_order ASC, id ASC").Find(&matches)
+		}
+
+		allMedia = append(allMedia, matches...)
+	}
+
+	if len(allMedia) == 0 {
+		log.Printf("[media-directive] Tidak ada media cocok untuk labels: %v", labels)
+		return mediaDirectiveResult{text: textBefore}, false
+	}
+
+	// Dedupe by ID
+	seen := map[uint]bool{}
+	var unique []models.MediaAsset
+	for _, m := range allMedia {
+		if !seen[m.ID] {
+			seen[m.ID] = true
+			unique = append(unique, m)
+		}
+	}
+
+	// Kirim semua media
+	var lastCaption string
+	for _, media := range unique {
+		if err := sendSingleMedia(agentID, toNumber, media); err != nil {
+			log.Printf("[media-directive] Gagal kirim media #%d (label=%s): %v", media.ID, media.Label, err)
+		}
+		if media.Caption != "" {
+			lastCaption = media.Caption
+		}
+		// Jeda kecil antar media biar WhatsApp tidak drop
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	finalText := buildFinalText(textBefore, textAfter, lastCaption)
+	return mediaDirectiveResult{text: finalText}, true
+}
+
+// sendSingleMedia mengirim satu media asset via WhatsApp.
+func sendSingleMedia(agentID uint, toNumber string, media models.MediaAsset) error {
 	data, err := os.ReadFile(media.FilePath)
 	if err != nil {
-		log.Printf("[media-directive] Gagal baca file %s: %v", media.FilePath, err)
-		return mediaDirectiveResult{}, false
+		return fmt.Errorf("gagal baca file %s: %w", media.FilePath, err)
 	}
 
-	// Kirim media
-	var sendErr error
 	switch media.MediaType {
 	case "image":
-		sendErr = services.WA(agentID).SendImage(toNumber, media.Caption, media.MimeType, data)
+		return services.WA(agentID).SendImage(toNumber, "", media.MimeType, data)
 	case "video":
-		sendErr = services.WA(agentID).SendVideo(toNumber, media.Caption, media.MimeType, data)
+		return services.WA(agentID).SendVideo(toNumber, "", media.MimeType, data)
 	case "document":
-		sendErr = services.WA(agentID).SendDocument(toNumber, media.FileName, media.MimeType, media.Caption, data)
+		return services.WA(agentID).SendDocument(toNumber, media.FileName, media.MimeType, "", data)
 	default:
-		sendErr = services.WA(agentID).SendDocument(toNumber, media.FileName, media.MimeType, media.Caption, data)
+		return services.WA(agentID).SendDocument(toNumber, media.FileName, media.MimeType, "", data)
 	}
+}
 
-	if sendErr != nil {
-		log.Printf("[media-directive] Gagal kirim media #%d: %v", mediaID, sendErr)
-	}
-
-	// Ambil teks di luar directive (sebelum dan sesudah token)
-	textBefore := strings.TrimSpace(reply[:start])
-	textAfter := strings.TrimSpace(reply[end+len(suffix):])
+// buildFinalText menggabungkan teks sebelum/sesudah directive + caption fallback.
+func buildFinalText(textBefore, textAfter, fallbackCaption string) string {
 	finalText := textBefore
 	if textAfter != "" {
 		if finalText != "" {
@@ -1630,9 +1821,314 @@ func handleSendMediaDirective(agentID uint, toNumber, reply string) (mediaDirect
 		}
 		finalText += textAfter
 	}
-	if finalText == "" && media.Caption != "" {
-		finalText = media.Caption
+	if finalText == "" && fallbackCaption != "" {
+		finalText = fallbackCaption
+	}
+	return finalText
+}
+
+// ---------------------------------------------------------------------------
+// Label Directive: [[LABEL:nama_label]]
+// Memungkinkan AI memberi label WhatsApp ke kontak secara otomatis.
+// ---------------------------------------------------------------------------
+
+// handleLabelDirective mendeteksi dan mengeksekusi directive [[LABEL:...]].
+// Mendukung single atau multi label (dipisah koma).
+// Mengembalikan teks balasan (tanpa directive) + true bila diproses.
+func handleLabelDirective(agentID uint, sender, reply string) (string, bool) {
+	const prefix = "[[LABEL:"
+	const suffix = "]]"
+
+	if !strings.Contains(reply, prefix) {
+		return reply, false
 	}
 
-	return mediaDirectiveResult{text: finalText}, true
+	// Ekstrak semua directive [[LABEL:...]]
+	var cleanReply strings.Builder
+	remaining := reply
+	hasDirective := false
+
+	for {
+		start := strings.Index(remaining, prefix)
+		if start < 0 {
+			cleanReply.WriteString(remaining)
+			break
+		}
+		cleanReply.WriteString(remaining[:start])
+		end := strings.Index(remaining[start:], suffix)
+		if end < 0 {
+			cleanReply.WriteString(remaining[start:])
+			break
+		}
+		end += start
+
+		labelValue := strings.TrimSpace(remaining[start+len(prefix) : end])
+		remaining = remaining[end+len(suffix):]
+
+		// Proses label
+		labels := parseMediaLabels(labelValue) // reuse comma-split parser
+		for _, label := range labels {
+			if err := applyLabelToChat(agentID, sender, label); err != nil {
+				log.Printf("[label-directive] Gagal beri label '%s' ke %s: %v", label, sender, err)
+			} else {
+				log.Printf("[label-directive] Label '%s' diterapkan ke %s", label, sender)
+			}
+		}
+		hasDirective = true
+	}
+
+	if !hasDirective {
+		return reply, false
+	}
+
+	return strings.TrimSpace(cleanReply.String()), true
+}
+
+// applyLabelToChat mencari label WhatsApp berdasarkan nama dan menerapkannya ke kontak.
+// Sync dua arah: WhatsApp (via app-state patch) + DB lokal.
+func applyLabelToChat(agentID uint, sender, labelName string) error {
+	// Cari label di DB lokal
+	var label models.Label
+	if database.DB.Where("agent_id = ? AND name LIKE ?", agentID, "%"+labelName+"%").First(&label).Error != nil {
+		return fmt.Errorf("label '%s' tidak ditemukan", labelName)
+	}
+
+	// Sync ke WhatsApp asli (app-state patch)
+	if err := services.WA(agentID).ApplyLabel(sender, label.LabelID, true); err != nil {
+		log.Printf("[label-directive] Gagal sync label '%s' ke WA: %v — tetap simpan di DB lokal", labelName, err)
+	}
+
+	// Simpan di DB lokal
+	cl := models.ChatLabel{
+		AgentID: agentID,
+		LabelID: label.LabelID,
+		Sender:  sender,
+	}
+	return database.DB.Where(cl).FirstOrCreate(&cl).Error
+}
+
+// ---------------------------------------------------------------------------
+// Auto-Resi Directive: [[BUAT_RESI:nama|no_hp|alamat|kec_kota|isi|nilai|courier]]
+// Membuat pesanan pengiriman via Mengantar API secara otomatis.
+// Format: [[BUAT_RESI:Nama|0812xxx|Alamat lengkap|Kecamatan, Kota|Isi paket|Nilai|courier]]
+// ---------------------------------------------------------------------------
+
+// handleBuatResiDirective mendeteksi dan mengeksekusi directive [[BUAT_RESI:...]].
+func handleBuatResiDirective(agentID uint, sender, reply string) (string, bool) {
+	const prefix = "[[BUAT_RESI:"
+	const suffix = "]]"
+
+	if !strings.Contains(reply, prefix) {
+		return reply, false
+	}
+
+	start := strings.Index(reply, prefix)
+	end := strings.Index(reply[start:], suffix)
+	if end < 0 {
+		return reply, false
+	}
+	end += start
+
+	payload := strings.TrimSpace(reply[start+len(prefix) : end])
+	parts := strings.Split(payload, "|")
+	if len(parts) < 6 {
+		log.Printf("[buat-resi] Format tidak valid (butuh minimal 6 field, dapat %d): %s", len(parts), payload)
+		// Hapus directive dari balasan tapi jangan proses
+		cleanReply := strings.TrimSpace(reply[:start] + reply[end+len(suffix):])
+		return cleanReply, true
+	}
+
+	customerName := strings.TrimSpace(parts[0])
+	customerPhone := strings.TrimSpace(parts[1])
+	customerAddress := strings.TrimSpace(parts[2])
+	destinationKeyword := strings.TrimSpace(parts[3]) // "Kecamatan, Kota"
+	parcelContent := strings.TrimSpace(parts[4])
+	goodsValueStr := strings.TrimSpace(parts[5])
+	courier := "JNE"
+	if len(parts) >= 7 {
+		courier = strings.ToUpper(strings.TrimSpace(parts[6]))
+	}
+	if courier != "JNE" && courier != "JT" {
+		courier = "JNE"
+	}
+
+	goodsValue, _ := strconv.Atoi(goodsValueStr)
+	if goodsValue <= 0 {
+		goodsValue = 39000
+	}
+
+	if customerName == "" || customerPhone == "" || destinationKeyword == "" {
+		log.Printf("[buat-resi] Data tidak lengkap: %s", payload)
+		cleanReply := strings.TrimSpace(reply[:start] + reply[end+len(suffix):])
+		return cleanReply, true
+	}
+
+	// Cari alamat tujuan via Mengantar
+	addresses, err := services.SearchAddress(destinationKeyword)
+	if err != nil || len(addresses) == 0 {
+		log.Printf("[buat-resi] Alamat tidak ditemukan: %s — %v", destinationKeyword, err)
+		cleanReply := strings.TrimSpace(reply[:start] + reply[end+len(suffix):])
+		return cleanReply, true
+	}
+
+	// Ambil origin address
+	var ag models.Agent
+	if database.DB.First(&ag, agentID).Error != nil {
+		log.Printf("[buat-resi] Agent %d tidak ditemukan", agentID)
+		return reply[:start] + reply[end+len(suffix):], true
+	}
+
+	originAddrID := ag.MengantarOriginAddressID
+	originAutofillID := ag.MengantarOriginAutofillID
+	if originAddrID == "" || originAutofillID == "" {
+		// Fallback ke env
+		originAddrID = config.Env("MENGANTAR_ORIGIN_ADDRESS_ID", "")
+		originAutofillID = config.Env("MENGANTAR_ORIGIN_AUTOFILL_ID", "")
+	}
+	if originAddrID == "" || originAutofillID == "" {
+		addrs, err := services.GetMyAddresses()
+		if err == nil && len(addrs) > 0 {
+			originAddrID = addrs[0].ID
+			originAutofillID = addrs[0].PickupAutofill
+		}
+	}
+	if originAddrID == "" {
+		log.Printf("[buat-resi] Origin address tidak dikonfigurasi")
+		return reply[:start] + reply[end+len(suffix):], true
+	}
+
+	// Jadwalkan pickup besok
+	tomorrow := time.Now().Add(24 * time.Hour)
+	dateStr := tomorrow.Format("01-02-2006")
+	timeID, _ := services.AddPickupTime(originAddrID, dateStr, "9:00")
+
+	weightKg := 0.5 // default 500g
+	orderReq := services.MengantarOrderRequest{
+		Courier: courier,
+		Pickup: services.MengantarPickup{
+			Type:      "scheduledPickup",
+			Volume:    "volumeMotor",
+			AddressID: originAddrID,
+		},
+		Orders: []services.MengantarOrderItem{{
+			CustomerAddressDataID:  addresses[0].ID,
+			CustomerAddress:        customerAddress,
+			CustomerName:           customerName,
+			CustomerPhone:          customerPhone,
+			Weight:                 weightKg,
+			Quantity:               1,
+			ParcelContent:          parcelContent,
+			GoodsValue:             goodsValue,
+			DontIncludeSubdistrict: false,
+		}},
+	}
+	if timeID != nil {
+		orderReq.Pickup.TimeID = timeID.ID
+	}
+
+	resp, err := services.CreateOrder(orderReq)
+	if err != nil {
+		log.Printf("[buat-resi] Gagal buat order: %v", err)
+		return reply[:start] + reply[end+len(suffix):], true
+	}
+
+	// Simpan ke DB lokal
+	for _, o := range resp.Data {
+		shippingOrder := models.ShippingOrder{
+			AgentID:                  agentID,
+			TenantID:                 1,
+			ChatSender:               sender,
+			MengantarOrderID:         o.OrderID,
+			MengantarBatchID:         o.BatchID,
+			CnoteNo:                  o.CnoteNo,
+			Courier:                  courier,
+			CustomerName:             customerName,
+			CustomerAddress:          customerAddress,
+			CustomerPhone:            customerPhone,
+			DestinationAddressDataID: addresses[0].ID,
+			OriginAddressID:          originAddrID,
+			OriginAutofillID:         originAutofillID,
+			WeightGram:               int(weightKg * 1000),
+			Quantity:                 1,
+			ParcelContent:            parcelContent,
+			GoodsValue:               goodsValue,
+			ShippingCost:             int(o.EstimatedPrice),
+			ShippingCostDiscounted:   int(o.EstimatedSpecialPrice),
+			Status:                   o.Status,
+			StatusCategory:           o.StatusCategory,
+			IsPaid:                   o.IsPaid,
+			CreatedAt:                time.Now(),
+			UpdatedAt:                time.Now(),
+		}
+		database.DB.Create(&shippingOrder)
+		log.Printf("[buat-resi] Resi dibuat: %s (%s) untuk %s", o.CnoteNo, courier, customerName)
+	}
+
+	// Hapus directive dari balasan
+	cleanReply := strings.TrimSpace(reply[:start] + reply[end+len(suffix):])
+	return cleanReply, true
+}
+
+// ---------------------------------------------------------------------------
+// Closing Inspector — deteksi kontak yang sudah Closing (deal selesai)
+// ---------------------------------------------------------------------------
+
+// getContactClosedLabel mengecek apakah kontak punya label Closing atau Transfer+Closing.
+// Mengembalikan nama label ("Closing" atau "Transfer") atau "" jika belum closing.
+func getContactClosedLabel(agentID uint, sender string) string {
+	var labels []models.ChatLabel
+	database.DB.Where("agent_id = ? AND sender = ?", agentID, sender).Find(&labels)
+	if len(labels) == 0 {
+		return ""
+	}
+
+	hasClosing := false
+	hasTransfer := false
+	for _, cl := range labels {
+		var label models.Label
+		if database.DB.Where("agent_id = ? AND label_id = ?", agentID, cl.LabelID).First(&label).Error == nil {
+			name := strings.ToLower(label.Name)
+			if strings.Contains(name, "closing") {
+				hasClosing = true
+			}
+			if strings.Contains(name, "transfer") {
+				hasTransfer = true
+			}
+		}
+	}
+
+	if hasClosing && hasTransfer {
+		return "Transfer"
+	}
+	if hasClosing {
+		return "Closing"
+	}
+	return ""
+}
+
+// buildClosedContactReply membuat balasan untuk kontak yang sudah Closing.
+// Jika kontak tanya order lagi, arahkan untuk repeat order dengan flow normal.
+func buildClosedContactReply(agent models.Agent, sender, msg, closedLabel string) string {
+	msg = strings.ToLower(strings.TrimSpace(msg))
+
+	// Sapaan ringan / basa-basi → respond singkat
+	greetings := []string{"halo", "hai", "hi", "pagi", "siang", "sore", "malam", "makasih", "terima kasih", "thanks", "ok", "oke", "siap"}
+	for _, g := range greetings {
+		if msg == g || strings.HasPrefix(msg, g) {
+			return "Halo kak! Terima kasih sudah order di slaludiskon.com 😊\n\nKalau ada yang bisa dibantu, boleh ditanyakan ya 🙏"
+		}
+	}
+
+	// Tanya order lagi → arahkan flow normal
+	if strings.Contains(msg, "pesan") || strings.Contains(msg, "order") || strings.Contains(msg, "beli") || strings.Contains(msg, "lagi") {
+		return "" // kosong → biarkan AI yang handle (anggap sebagai lead baru)
+	}
+
+	// Komplain → eskalasi
+	if strings.Contains(msg, "komplain") || strings.Contains(msg, "belum sampe") || strings.Contains(msg, "rusak") || strings.Contains(msg, "salah") {
+		return "Halo kak! Maaf atas ketidaknyamanannya. Bisa ceritakan detail kendalanya? Nanti saya bantu cek ya 🙏"
+	}
+
+	// Default: acknowledge as past customer
+	return "Halo kak! Terima kasih sudah menghubungi kami lagi.\n\nUntuk pesanan sebelumnya, semoga sudah diterima dengan baik ya 😊\n\nKalau ada yang bisa kami bantu, silakan ditanyakan 🙏"
 }

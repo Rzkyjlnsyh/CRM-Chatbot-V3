@@ -10,45 +10,60 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/driver/mysql"
+	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 
 var DB *gorm.DB
 
 func Init() {
+	// Coba MySQL dulu, fallback ke SQLite kalau MySQL tidak tersedia
 	host := config.Env("DB_HOST", "localhost")
 	port := config.Env("DB_PORT", "3306")
 	user := config.Env("DB_USER", "root")
 	pass := config.Env("DB_PASS", "")
 	name := config.Env("DB_NAME", "wa_assistant")
-	// Validasi nama DB (hanya huruf/angka/underscore) sebelum dipakai di query CREATE DATABASE.
-	if !validDBName(name) {
-		log.Printf("DB_NAME tidak valid (%q) — pakai default 'wa_assistant'", name)
-		name = "wa_assistant"
-	}
 
-	// Buat database-nya kalau belum ada (connect tanpa nama DB dulu).
-	rootDSN := fmt.Sprintf("%s:%s@tcp(%s:%s)/?charset=utf8mb4&parseTime=True&loc=Local", user, pass, host, port)
-	if rootDB, err := gorm.Open(mysql.Open(rootDSN), &gorm.Config{}); err == nil {
-		rootDB.Exec("CREATE DATABASE IF NOT EXISTS `" + name + "` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
-		if sqlDB, e := rootDB.DB(); e == nil {
-			sqlDB.Close()
+	var err error
+
+	// Coba MySQL
+	if host != "" && host != "sqlite" {
+		if !validDBName(name) {
+			log.Printf("DB_NAME tidak valid (%q) — pakai default 'wa_assistant'", name)
+			name = "wa_assistant"
+		}
+
+		rootDSN := fmt.Sprintf("%s:%s@tcp(%s:%s)/?charset=utf8mb4&parseTime=True&loc=Local", user, pass, host, port)
+		if rootDB, rootErr := gorm.Open(mysql.Open(rootDSN), &gorm.Config{}); rootErr == nil {
+			rootDB.Exec("CREATE DATABASE IF NOT EXISTS `" + name + "` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
+			if sqlDB, e := rootDB.DB(); e == nil {
+				sqlDB.Close()
+			}
+		}
+
+		dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=True&loc=Local", user, pass, host, port, name)
+		DB, err = gorm.Open(mysql.Open(dsn), &gorm.Config{})
+		if err == nil {
+			log.Println("Database: MySQL connected")
+			if sqlDB, e := DB.DB(); e == nil {
+				sqlDB.SetMaxOpenConns(config.EnvInt("DB_MAX_OPEN_CONNS", 25))
+				sqlDB.SetMaxIdleConns(config.EnvInt("DB_MAX_IDLE_CONNS", 5))
+				sqlDB.SetConnMaxLifetime(time.Duration(config.EnvInt("DB_CONN_MAX_LIFETIME_MIN", 30)) * time.Minute)
+			}
 		}
 	}
 
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=True&loc=Local", user, pass, host, port, name)
-	var err error
-	DB, err = gorm.Open(mysql.Open(dsn), &gorm.Config{})
-	if err != nil {
-		log.Fatal("DB error (MySQL): ", err)
-	}
-
-	// Batasi connection pool agar lonjakan traffic tidak menghabiskan koneksi MySQL
-	// (penting di VPS yang dipakai bersama situs lain). Semua bisa diatur via env.
-	if sqlDB, e := DB.DB(); e == nil {
-		sqlDB.SetMaxOpenConns(config.EnvInt("DB_MAX_OPEN_CONNS", 25))
-		sqlDB.SetMaxIdleConns(config.EnvInt("DB_MAX_IDLE_CONNS", 5))
-		sqlDB.SetConnMaxLifetime(time.Duration(config.EnvInt("DB_CONN_MAX_LIFETIME_MIN", 30)) * time.Minute)
+	// Fallback ke SQLite
+	if DB == nil || err != nil {
+		if err != nil {
+			log.Printf("MySQL unavailable (%v) — fallback ke SQLite", err)
+		}
+		dbPath := config.Env("DB_PATH", "./wa-assistant.db")
+		DB, err = gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
+		if err != nil {
+			log.Fatal("Database error (SQLite): ", err)
+		}
+		log.Printf("Database: SQLite connected (%s)", dbPath)
 	}
 
 	DB.AutoMigrate(
