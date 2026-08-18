@@ -1076,3 +1076,45 @@ export function useUsage() {
     queryFn: async () => (await api.get('/usage')).data,
   });
 }
+
+// Meta CAPI: konfigurasi pixel + save + test event
+export interface MetaConfigData {
+  pixel_id: string;
+  configured: boolean;
+  test_event_code: string;
+  conv_labels: string;
+  event_name: string;
+  label_events: Record<string, string>;
+  standard_events: string[];
+  recent_events: any[];
+  available_labels: any[];
+}
+
+export function useMetaConfig(agentId: number) {
+  return useQuery<MetaConfigData>({
+    queryKey: ['meta-config', agentId],
+    queryFn: async () => (await api.get(`/agents/${agentId}/meta`)).data.data,
+    enabled: !!agentId,
+  });
+}
+
+export function useSaveMetaConfig(agentId: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: Record<string, any>) =>
+      (await api.put(`/agents/${agentId}/meta`, body)).data,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['meta-config', agentId] });
+    },
+  });
+}
+
+export function useTestMetaEvent(agentId: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async () => (await api.post(`/agents/${agentId}/meta/test`)).data,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['meta-config', agentId] });
+    },
+  });
+}

@@ -45,6 +45,7 @@ import TestChatPanel from '../components/TestChatPanel';
 import BroadcastPanel from '../components/BroadcastPanel';
 import CalendarPanel from '../components/CalendarPanel';
 import AutoReplyPanel from '../components/AutoReplyPanel';
+import MetaCapiPanel from '../components/MetaCapiPanel';
 import FlowPanel from '../components/FlowPanel';
 import ApiPanel from '../components/ApiPanel';
 import ApiIcon from '@mui/icons-material/ApiOutlined';
@@ -211,6 +212,7 @@ const NAV_GROUPS = [
     { id: 'alur', label: 'Alur Otomatis', icon: <AccountTreeIcon fontSize="small" /> },
     { id: 'template', label: 'Template', icon: <TemplateIcon fontSize="small" /> },
     { id: 'produk', label: 'Produk', icon: <KnowledgeIcon fontSize="small" /> },
+    { id: 'meta', label: 'Meta CAPI', icon: <AutoAwesomeIcon fontSize="small" /> },
     { id: 'coba-chat', label: 'Simulasi AI', icon: <ChatIcon fontSize="small" /> },
   ] },
   { section: 'Grup', items: [
@@ -2375,6 +2377,7 @@ export default function Dashboard() {
           </Box>
         )}
         {tab === 'coba-chat' && <TestChatPanel agentId={agentId} />}
+        {tab === 'meta' && <MetaCapiPanel agentId={agentId} />}
         {tab === 'grup' && <GroupGuardPanel agentId={agentId} />}
         {tab === 'broadcast' && <BroadcastPanel agentId={agentId} seed={seed?.kind === 'broadcast' ? seed : null} />}
         {tab === 'kalender' && <CalendarPanel agentId={agentId} />}

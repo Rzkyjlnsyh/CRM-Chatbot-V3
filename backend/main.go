@@ -172,6 +172,12 @@ func main() {
 			auth.POST("/agents/:id/api/webhook/test", handlers.TestWebhook)
 			auth.POST("/agents/:id/api/test-message", handlers.TestAPIMessage)
 			auth.GET("/agents/:id/handoffs", handlers.ListHandoffs)
+
+			// Meta CAPI (label WhatsApp -> event Facebook Ads).
+			auth.GET("/agents/:id/meta", handlers.GetMetaConfig)
+			auth.PUT("/agents/:id/meta", handlers.SaveMetaConfig)
+			auth.POST("/agents/:id/meta/test", handlers.TestMetaEvent)
+			auth.GET("/agents/:id/meta/logs", handlers.MetaConversionLogs)
 			auth.DELETE("/agents/:id/handoffs/:sender", handlers.ResumeHandoff)
 			auth.GET("/agents/:id/chat-history", handlers.ChatHistory)
 			auth.GET("/agents/:id/settings", handlers.GetSettings)

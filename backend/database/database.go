@@ -75,6 +75,7 @@ func Init() {
 		&models.Broadcast{}, &models.BroadcastRecipient{}, &models.OptOut{}, &models.ContactConsent{},
 		&models.ScheduledMessage{}, &models.ScheduledStatus{}, &models.Label{}, &models.ChatLabel{}, &models.AutoReply{},
 		&models.Flow{}, &models.FlowSession{}, &models.OTPCode{},
+		&models.MetaConversion{},
 		&models.Template{},
 		&models.FollowUp{}, &models.FollowUpStep{}, &models.FollowUpEnrollment{},
 		&models.Product{}, &models.ProductCheckoutSession{}, &models.ProductOrder{},

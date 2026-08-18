@@ -52,6 +52,17 @@ type Agent struct {
 	WebhookURL    string `gorm:"type:text" json:"webhook_url"`
 	WebhookSecret string `gorm:"size:80" json:"-"`
 
+	// Meta CAPI: konversi label WhatsApp -> event Facebook Ads (server-side).
+	MetaPixelID       string `gorm:"size:32" json:"meta_pixel_id"`
+	MetaAccessToken   string `gorm:"size:255" json:"-"`
+	MetaTestEventCode string `gorm:"size:32" json:"meta_test_event_code"`
+	MetaConvLabels    string `gorm:"type:text" json:"meta_conv_labels"` // label_id dipisah koma
+	MetaEventName     string `gorm:"size:32;default:Purchase" json:"meta_event_name"`
+	// MetaLabelEvents = pemetaan label_id -> event CAPI (JSON array):
+	// [{"label_id":"12","event":"Purchase"},...]
+	// Kosong = semua label konversi memakai MetaEventName (fallback lama).
+	MetaLabelEvents string `gorm:"type:text" json:"meta_label_events"`
+
 	CreatedAt time.Time `json:"created_at"`
 }
 

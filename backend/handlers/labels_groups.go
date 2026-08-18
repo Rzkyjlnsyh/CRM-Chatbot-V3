@@ -32,6 +32,10 @@ func OnLabelAssoc(agentID uint, sender, labelID string, labeled bool) {
 	if labeled {
 		var cl models.ChatLabel
 		database.DB.Where(models.ChatLabel{AgentID: agentID, LabelID: labelID, Sender: sender}).FirstOrCreate(&cl)
+		// Meta CAPI: label konversi menempel -> kirim event ke Meta Ads.
+		if services.IsMetaConvLabel(agentID, labelID) {
+			services.FireMetaConversion(agentID, sender, labelID)
+		}
 	} else {
 		database.DB.Where("agent_id = ? AND label_id = ? AND sender = ?", agentID, labelID, sender).Delete(&models.ChatLabel{})
 	}
@@ -116,6 +120,13 @@ func SyncLabels(c *gin.Context) {
 	if err := tx.Commit().Error; err != nil {
 		c.JSON(500, gin.H{"error": "Gagal menyelesaikan penyimpanan label"})
 		return
+	}
+	// Meta CAPI: label hasil sync yang merupakan label konversi juga memicu
+	// event ke Meta Ads (dedup di DB mencegah dobel kirim saat restart).
+	for _, cl := range contactRows {
+		if services.IsMetaConvLabel(id, cl.LabelID) {
+			services.FireMetaConversion(id, cl.Sender, cl.LabelID)
+		}
 	}
 	c.JSON(200, gin.H{
 		"data":      labelResponseData(id),
