@@ -662,3 +662,98 @@ export interface ScheduledStatus {
   error?: string;
   created_at: string;
 }
+
+// --- Learning Engine types ---
+
+export interface LearningRun {
+  id: number;
+  agent_id: number;
+  status: string; // pending, running, completed, failed
+  source_start_date?: string;
+  source_end_date?: string;
+  total_chats: number;
+  human_chats: number;
+  pattern_count: number;
+  style_profile?: string; // JSON
+  summary?: string;       // rekap apa yg dipelajari & diterapkan
+  error?: string;
+  created_at: string;
+  completed_at?: string;
+}
+
+export interface LearningPattern {
+  id: number;
+  learning_run_id: number;
+  agent_id: number;
+  label_id?: string;   // label WhatsApp konteks pola ("" = umum)
+  label_name?: string; // nama label (untuk tampilan)
+  pattern_type: string; // greeting, closing, objection_handling, upsell, tone, emoji_style, phrase, follow_up, label_handling, closing_path
+  trigger_context: string;
+  response_template: string;
+  emoji_signature: string;
+  confidence: number;
+  usage_count: number;
+  closing_impact: number;
+  status: string; // suggested, applied, rejected
+  applied_at?: string;
+  knowledge_id?: number;
+  created_at: string;
+}
+
+export interface LearningSnapshot {
+  id: number;
+  agent_id: number;
+  learning_run_id?: number;
+  snapshot_type: string;
+  label: string;
+  persona_at: string;
+  knowledge_count: number;
+  created_at: string;
+}
+
+export interface LearningConfig {
+  id: number;
+  agent_id: number;
+  enabled: boolean;
+  auto_apply: boolean;
+  min_confidence: number;
+  min_usage_count: number;
+  max_patterns_per_run: number;
+  preserve_manual_knowledge: boolean;
+  schedule_enabled: boolean;
+  schedule_cron: string;
+  lookback_days: number;
+  updated_at: string;
+}
+
+export interface LearningStatus {
+  last_run?: LearningRun;
+  patterns_suggested: number;
+  patterns_applied: number;
+  patterns_rejected: number;
+  snapshot_count: number;
+  config: LearningConfig;
+}
+
+export interface LearningRunDetail {
+  run: LearningRun;
+  patterns: LearningPattern[];
+}
+
+export interface StyleProfile {
+  greeting_patterns: string[];
+  closing_patterns: string[];
+  common_phrases: string[];
+  emoji_usage: string[];
+  tone_description: string;
+  pacing_style: string;
+  objection_handling: string[];
+  upsell_techniques: string[];
+  follow_up_style: string[];
+}
+
+export interface LearningEnqueued {
+  run_id: number;
+  status: string; // pending
+  message: string;
+}

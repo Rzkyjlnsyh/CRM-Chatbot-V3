@@ -163,6 +163,21 @@ func main() {
 			auth.POST("/agents/:id/wa/connect", handlers.ConnectNumber)
 			auth.POST("/agents/:id/wa/connect-pairing", handlers.ConnectPairingNumber)
 			auth.POST("/agents/:id/wa/logout", handlers.LogoutNumber)
+			// --- Learning Engine (AI belajar dari chat CS manusia) ---
+			auth.POST("/agents/:id/learning/run", handlers.StartLearning)
+			auth.GET("/agents/:id/learning/status", handlers.GetLearningStatus)
+			auth.GET("/agents/:id/learning/runs", handlers.GetLearningRuns)
+			auth.GET("/agents/:id/learning/runs/:rid", handlers.GetLearningRun)
+			auth.GET("/agents/:id/learning/patterns", handlers.GetLearningPatterns)
+			auth.POST("/agents/:id/learning/patterns/:pid/apply", handlers.ApplyLearningPattern)
+			auth.POST("/agents/:id/learning/patterns/:pid/reject", handlers.RejectLearningPattern)
+			auth.POST("/agents/:id/learning/patterns/apply-all", handlers.ApplyAllPatterns)
+			auth.GET("/agents/:id/learning/snapshots", handlers.GetSnapshots)
+			auth.POST("/agents/:id/learning/snapshots", handlers.CreateSnapshotAPI)
+			auth.POST("/agents/:id/learning/snapshots/:sid/rollback", handlers.RollbackSnapshot)
+			auth.GET("/agents/:id/learning/config", handlers.GetLearningConfigAPI)
+			auth.PUT("/agents/:id/learning/config", handlers.SaveLearningConfigAPI)
+
 			// REST API & webhook per-nomor (kelola key/URL dari dashboard).
 			auth.GET("/agents/:id/api", handlers.GetAPISettings)
 			auth.POST("/agents/:id/api/key", handlers.RotateAPIKey)

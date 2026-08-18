@@ -45,6 +45,7 @@ import TestChatPanel from '../components/TestChatPanel';
 import BroadcastPanel from '../components/BroadcastPanel';
 import CalendarPanel from '../components/CalendarPanel';
 import AutoReplyPanel from '../components/AutoReplyPanel';
+import LearningPanel from '../components/LearningPanel';
 import FlowPanel from '../components/FlowPanel';
 import ApiPanel from '../components/ApiPanel';
 import ApiIcon from '@mui/icons-material/ApiOutlined';
@@ -58,6 +59,7 @@ import ProductPanel from '../components/ProductPanel';
 import GroupGuardPanel from '../components/GroupGuardPanel';
 import StatusPanel from '../components/StatusPanel';
 import AutoStoriesIcon from '@mui/icons-material/AutoStoriesOutlined';
+import PsychologyIcon from '@mui/icons-material/PsychologyOutlined';
 import PageHeader from '../components/PageHeader';
 import {
   useAgents, useAgentStatuses, useAgentStatus, useAgentKnowledge,
@@ -208,6 +210,7 @@ const NAV_GROUPS = [
   { section: 'AI & Otomasi', items: [
     { id: 'agent-ai', label: 'Asisten AI', icon: <SmartToyIcon fontSize="small" /> },
     { id: 'auto-reply', label: 'Auto-Reply', icon: <RuleIcon fontSize="small" /> },
+    { id: 'learning', label: 'AI Learning', icon: <PsychologyIcon fontSize="small" /> },
     { id: 'alur', label: 'Alur Otomatis', icon: <AccountTreeIcon fontSize="small" /> },
     { id: 'template', label: 'Template', icon: <TemplateIcon fontSize="small" /> },
     { id: 'produk', label: 'Produk', icon: <KnowledgeIcon fontSize="small" /> },
@@ -2379,6 +2382,7 @@ export default function Dashboard() {
         {tab === 'broadcast' && <BroadcastPanel agentId={agentId} seed={seed?.kind === 'broadcast' ? seed : null} />}
         {tab === 'kalender' && <CalendarPanel agentId={agentId} />}
         {tab === 'auto-reply' && <AutoReplyPanel agentId={agentId} />}
+        {tab === 'learning' && <LearningPanel agentId={agentId} />}
         {tab === 'template' && <TemplatePanel agentId={agentId} />}
         {tab === 'follow-up' && <FollowUpPanel agentId={agentId} />}
         {tab === 'produk' && <ProductPanel agentId={agentId} />}
