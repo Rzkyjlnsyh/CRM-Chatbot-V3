@@ -1076,3 +1076,40 @@ export function useUsage() {
     queryFn: async () => (await api.get('/usage')).data,
   });
 }
+
+// Kontrol AI per kontak (dipakai CS dari inbox).
+export function usePauseAIContact(agentId: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (sender: string) =>
+      (await api.post(`/agents/${agentId}/contacts/${encodeURIComponent(sender)}/ai-off`)).data.data,
+    onSuccess: (_d, sender) => {
+      qc.invalidateQueries({ queryKey: ['conversation', agentId, sender] });
+      qc.invalidateQueries({ queryKey: ['contacts', agentId] });
+    },
+  });
+}
+
+export function useResumeAIContact(agentId: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (sender: string) =>
+      (await api.post(`/agents/${agentId}/contacts/${encodeURIComponent(sender)}/ai-on`)).data.data,
+    onSuccess: (_d, sender) => {
+      qc.invalidateQueries({ queryKey: ['conversation', agentId, sender] });
+      qc.invalidateQueries({ queryKey: ['contacts', agentId] });
+    },
+  });
+}
+
+export function useManualHandoffContact(agentId: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (sender: string) =>
+      (await api.post(`/agents/${agentId}/contacts/${encodeURIComponent(sender)}/handoff`)).data.data,
+    onSuccess: (_d, sender) => {
+      qc.invalidateQueries({ queryKey: ['conversation', agentId, sender] });
+      qc.invalidateQueries({ queryKey: ['handoffs', agentId] });
+    },
+  });
+}

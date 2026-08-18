@@ -172,6 +172,11 @@ func main() {
 			auth.POST("/agents/:id/api/webhook/test", handlers.TestWebhook)
 			auth.POST("/agents/:id/api/test-message", handlers.TestAPIMessage)
 			auth.GET("/agents/:id/handoffs", handlers.ListHandoffs)
+			// Kontrol AI per kontak (CS dari inbox: jeda/lanjutkan AI, pindah ke CS).
+			auth.POST("/agents/:id/contacts/:sender/ai-off", handlers.PauseAIContact)
+			auth.POST("/agents/:id/contacts/:sender/ai-on", handlers.ResumeAIContact)
+			auth.GET("/agents/:id/contacts/:sender/ai-status", handlers.ContactAIStatus)
+			auth.POST("/agents/:id/contacts/:sender/handoff", handlers.ManualHandoffContact)
 			auth.DELETE("/agents/:id/handoffs/:sender", handlers.ResumeHandoff)
 			auth.GET("/agents/:id/chat-history", handlers.ChatHistory)
 			auth.GET("/agents/:id/settings", handlers.GetSettings)

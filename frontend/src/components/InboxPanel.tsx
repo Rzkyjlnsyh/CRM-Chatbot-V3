@@ -28,6 +28,7 @@ import PhoneOutlinedIcon from '@mui/icons-material/PhoneOutlined';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import {
   useContacts, useConversation, useConversationBrief, useRefreshConversationBrief,
+  usePauseAIContact, useResumeAIContact, useManualHandoffContact,
   useSendMessage, useSendMedia, postAgentTyping, useRevokeMessage, useResumeBot, useReanalyzeImage,
   useDeleteInboxConversation, useLoadOlderMessages,
 } from '../hooks';
@@ -690,7 +691,6 @@ const MessageThread = memo(function MessageThread({
   onLoadOlder?: () => void;
   loadingOlder?: boolean;
 }) {
-  const oldestId = messages.length > 0 ? messages[0].id : 0;
   return (
     <Box
       ref={chatRef}
@@ -1015,6 +1015,9 @@ export default function InboxPanel({
   const refreshBrief = useRefreshConversationBrief(agentId);
   const revokeMsg = useRevokeMessage(agentId);
   const sendMsg = useSendMessage(agentId);
+  const pauseAI = usePauseAIContact(agentId);
+  const resumeAI = useResumeAIContact(agentId);
+  const manualHandoff = useManualHandoffContact(agentId);
   const sendMedia = useSendMedia(agentId);
   const resumeBot = useResumeBot(agentId);
   const reanalyzeImage = useReanalyzeImage(agentId);
@@ -1608,6 +1611,49 @@ export default function InboxPanel({
                     : 'Nonaktif di agent'
               }
             />
+            {aiEnabled && (
+              <Stack direction="row" spacing={1} sx={{ pt: 0.5 }}>
+                {convo?.manual_pause_until && new Date(convo.manual_pause_until).getTime() > Date.now() ? (
+                  <Button
+                    size="small"
+                    variant="contained"
+                    color="success"
+                    disabled={resumeAI.isPending}
+                    onClick={() =>
+                      swalConfirm('Lanjutkan AI untuk customer ini?', 'Bot akan kembali membalas pesan otomatis.')
+                        .then((ok) => ok && resumeAI.mutate(sender))
+                    }
+                  >
+                    Lanjutkan AI
+                  </Button>
+                ) : (
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    color="warning"
+                    disabled={pauseAI.isPending}
+                    onClick={() =>
+                      swalConfirm('Jeda AI untuk customer ini?', 'Bot berhenti membalas (termasuk auto-reply) sampai dinyalakan lagi. Chat sepenuhnya dipegang CS.')
+                        .then((ok) => ok && pauseAI.mutate(sender))
+                    }
+                  >
+                    Jeda AI
+                  </Button>
+                )}
+                <Button
+                  size="small"
+                  variant="outlined"
+                  color="error"
+                  disabled={manualHandoff.isPending}
+                  onClick={() =>
+                    swalConfirm('Pindahkan ke Butuh CS?', 'Percakapan masuk antrean Butuh CS. AI tetap melayani info aman sampai CS membalas, lalu diam.')
+                      .then((ok) => ok && manualHandoff.mutate(sender))
+                  }
+                >
+                  Ke CS
+                </Button>
+              </Stack>
+            )}
             <InfoRow
               label="Pesan di thread"
               value={convo?.total ? `${convo.data?.length || 0} dimuat dari ${convo.total} total pesan` : convo?.data ? `${convo.data.length} pesan` : '—'}

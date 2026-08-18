@@ -204,6 +204,13 @@ func OnWAOwnMessage(agentID uint, recipient types.JID, in services.IncomingMessa
 }
 
 func pauseAIForManualReply(agentID uint, sender string) time.Time {
+	// Jangan timpa jeda yang masih aktif (mis. jeda permanen dari tombol
+	// "Jeda AI" di inbox) — CS yang sedang menangani chat tetap pegang kendali.
+	var contact models.Contact
+	if database.DB.Select("manual_pause_until").Where("agent_id = ? AND number = ?", agentID, sender).First(&contact).Error == nil &&
+		contact.ManualPauseUntil != nil && contact.ManualPauseUntil.After(time.Now()) {
+		return *contact.ManualPauseUntil
+	}
 	until := time.Now().Add(manualAIPauseDuration)
 	_ = database.DB.Model(&models.Contact{}).
 		Where("agent_id = ? AND number = ?", agentID, sender).
@@ -870,8 +877,8 @@ func applyEscalationPolicy(agentID uint, enhancedPrompt, tone, userMsg string, h
 
 func shouldAllowHumanHandoff(message string) bool {
 	lower := strings.ToLower(message)
-	human := containsAnyText(lower, "cs", "admin", "petugas", "operator", "manusia", "customer service", "live agent", "orang")
-	request := containsAnyText(lower, "hubungkan", "sambungkan", "teruskan", "bicara", "ngobrol", "ngomong", "hubungi", "panggil", "alihkan") ||
+	human := containsAnyText(lower, "cs", "admin", "petugas", "operator", "manusia", "customer service", "live agent", "orang", "bantuan")
+	request := containsAnyText(lower, "hubungkan", "sambungkan", "teruskan", "bicara", "ngobrol", "ngomong", "hubungi", "panggil", "alihkan", "butuh", "mau", "ingin", "perlu") ||
 		strings.Contains(lower, "minta cs") || strings.Contains(lower, "minta admin") ||
 		strings.Contains(lower, "minta petugas") || strings.Contains(lower, "minta customer service") ||
 		strings.Contains(lower, "ke customer service") || strings.Contains(lower, "sama orang")
@@ -880,7 +887,8 @@ func shouldAllowHumanHandoff(message string) bool {
 	}
 	return containsAnyText(lower,
 		"refund", "pengembalian dana", "salah transfer", "bukti pembayaran",
-		"penipuan", "komplain", "keluhan serius", "data pribadi bocor", "akun diblokir")
+		"penipuan", "komplain", "keluhan serius", "data pribadi bocor",
+		"akun diblokir", "diblokir", "di blokir", "ke blokir", "banned", "akun dibekukan")
 }
 
 func containsAnyText(value string, needles ...string) bool {
