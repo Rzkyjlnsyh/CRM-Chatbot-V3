@@ -39,6 +39,7 @@ func UploadMediaAsset(c *gin.Context) {
 	caption := strings.TrimSpace(c.PostForm("caption"))
 	triggerKeys := strings.TrimSpace(c.PostForm("trigger_keys"))
 	label := strings.TrimSpace(c.PostForm("label"))
+	sortOrder, _ := strconv.Atoi(strings.TrimSpace(c.PostForm("sort_order")))
 
 	fh, err := c.FormFile("file")
 	if err != nil {
@@ -104,6 +105,7 @@ func UploadMediaAsset(c *gin.Context) {
 		FileSize:    int64(len(data)),
 		Label:       label,
 		TriggerKeys: triggerKeys,
+		SortOrder:   sortOrder,
 		IsActive:    true,
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
@@ -140,4 +142,37 @@ func DeleteMediaAsset(c *gin.Context) {
 
 	database.DB.Delete(&asset)
 	c.JSON(200, gin.H{"success": true, "message": "Media dihapus"})
+}
+
+
+// ServeMediaAssetFile menyajikan file media asset (untuk preview di dashboard).
+// Route publik dengan token query — pola sama dengan ServeProductImage.
+// GET /api/agents/:id/media-assets/:assetId/file
+func ServeMediaAssetFile(c *gin.Context) {
+	tid, ok := tenantFromToken(c.Query("token"))
+	if !ok {
+		c.AbortWithStatus(401)
+		return
+	}
+	agentID, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		c.AbortWithStatus(400)
+		return
+	}
+	var agent models.Agent
+	if database.DB.Select("id").Where("id = ? AND tenant_id = ?", agentID, tid).First(&agent).Error != nil {
+		c.AbortWithStatus(404)
+		return
+	}
+	assetID, err := strconv.Atoi(c.Param("assetId"))
+	if err != nil {
+		c.AbortWithStatus(400)
+		return
+	}
+	var asset models.MediaAsset
+	if database.DB.Where("id = ? AND agent_id = ?", assetID, agentID).First(&asset).Error != nil || asset.FilePath == "" {
+		c.AbortWithStatus(404)
+		return
+	}
+	c.File(asset.FilePath)
 }

@@ -662,3 +662,21 @@ export interface ScheduledStatus {
   error?: string;
   created_at: string;
 }
+
+// Media assets: file media yang dikirim AI via directive [[SEND_MEDIA:label]].
+export interface MediaAsset {
+  id: number;
+  agent_id: number;
+  name: string;
+  file_name: string;
+  media_type: string; // image, video, document
+  mime_type: string;
+  caption: string;
+  file_size: number;
+  label: string;
+  trigger_keys: string;
+  sort_order: number;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}

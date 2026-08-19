@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from './services/api';
-import type { Analytics, AIMetrics, Contact, ChatMsg, ConversationBrief, Broadcast, BroadcastDetailData, BroadcastSafetyForm, BroadcastConsentSummary, WAGroup, GroupGuardConfig, GroupModerationLog, LabelInfo, ScheduledMessage, AutoReply, Template, SavedContact, SavedContactsResp, LeadStage, FollowUp, Agent, KnowledgeItem, Handoff, CrawlJob, CrawlPage, KnowledgeUsage, ScheduledStatus, ApiSettings, Flow, Product, ProductOrder, AIForm, AIFormSubmission } from './types';
+import type { Analytics, AIMetrics, Contact, ChatMsg, ConversationBrief, Broadcast, BroadcastDetailData, BroadcastSafetyForm, BroadcastConsentSummary, WAGroup, GroupGuardConfig, GroupModerationLog, LabelInfo, ScheduledMessage, AutoReply, Template, SavedContact, SavedContactsResp, LeadStage, FollowUp, Agent, KnowledgeItem, Handoff, CrawlJob, CrawlPage, KnowledgeUsage, ScheduledStatus, ApiSettings, Flow, Product, ProductOrder, AIForm, AIFormSubmission, MediaAsset } from './types';
 
 type ContactList = { number: string; name: string }[];
 
@@ -1074,5 +1074,36 @@ export function useUsage() {
   return useQuery<{ tenant: { id: number; name: string }; numbers_used: number; max_numbers: number }>({
     queryKey: ['usage'],
     queryFn: async () => (await api.get('/usage')).data,
+  });
+}
+
+// Media assets (SEND_MEDIA directive).
+export function useMediaAssets(agentId: number) {
+  return useQuery<MediaAsset[]>({
+    queryKey: ['media-assets', agentId],
+    queryFn: async () => (await api.get(`/agents/${agentId}/media-assets`)).data.data,
+    enabled: !!agentId,
+  });
+}
+
+export function useUploadMediaAsset(agentId: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (fd: FormData) =>
+      (await api.post(`/agents/${agentId}/media-assets`, fd)).data.data,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['media-assets', agentId] });
+    },
+  });
+}
+
+export function useDeleteMediaAsset(agentId: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (assetId: number) =>
+      (await api.delete(`/agents/${agentId}/media-assets/${assetId}`)).data,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['media-assets', agentId] });
+    },
   });
 }
