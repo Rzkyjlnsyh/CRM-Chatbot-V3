@@ -2215,7 +2215,7 @@ export default function Dashboard() {
               <Button
                 variant="contained"
                 onClick={saveAPIConfigOnly}
-                disabled={!apiKey}
+                disabled={!apiKey && !deepseekKey}
                 startIcon={<AutoAwesomeIcon />}
                 fullWidth
                 sx={{ fontWeight: 700 }}

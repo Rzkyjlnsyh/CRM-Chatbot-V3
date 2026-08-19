@@ -26,14 +26,17 @@ import (
 	waLog "go.mau.fi/whatsmeow/util/log"
 	"google.golang.org/protobuf/proto"
 
-	// Pure-Go SQLite driver (no CGO needed) — terdaftar sebagai "sqlite3"
+	// Pure-Go SQLite driver (no CGO needed) — fork modernc via glebarez,
+	// SATU library yang sama dengan driver GORM (glebarez/sqlite), jadi tidak
+	// ada konflik registrasi nama driver. Terdaftar sebagai "sqlite3".
 	"database/sql"
-	sqlite "modernc.org/sqlite"
+	sqlite "github.com/glebarez/go-sqlite"
 )
 
 func init() {
-	// Register modernc.org/sqlite under the "sqlite3" driver name (once)
-	// Skip if already registered (e.g., by GORM's sqlite driver)
+	// Daftarkan glebarez/go-sqlite (pure-Go, TANPA CGO) sebagai driver "sqlite3".
+	// mattn/go-sqlite3 tidak lagi dipakai di seluruh app, sehingga tidak ada
+	// stub CGO yang merebut nama driver ini saat build CGO_ENABLED=0.
 	defer func() { recover() }()
 	sql.Register("sqlite3", &sqlite.Driver{})
 }
@@ -224,8 +227,8 @@ func sessionDSN(agentID uint) string {
 		os.MkdirAll("data", 0o755)
 		path = fmt.Sprintf("data/wa-session-agent-%d.db", agentID)
 	}
-	// modernc.org/sqlite (pure Go): gunakan _pragma alih-alih _foreign_keys=on
-	return path + "?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
+	// glebarez/go-sqlite (pure Go, tanpa CGO): format file: + _pragma
+	return "file:" + path + "?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
 }
 
 // FirstDeviceJID membaca device pada file sesi agent 1 (untuk migrasi single-number lama).
