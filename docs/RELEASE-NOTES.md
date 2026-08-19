@@ -1,6 +1,6 @@
-# Release Notes — Learning Engine, Kontrol Kontak, Meta CAPI
+# Release Notes — Learning Engine, Kontrol Kontak, Meta CAPI, Stabilitas Build
 
-Ringkasan teknis tiga branch fitur di atas `e31d073`, ditulis berdasarkan
+Ringkasan teknis empat branch fitur di atas `e31d073`, ditulis berdasarkan
 implementasi aktual di kode.
 
 ---
@@ -193,13 +193,49 @@ tabel 20 event terakhir, tombol test event.
 
 ---
 
+## 4. Stabilitas Build — `feature/stability-fixes`
+
+### Deskripsi
+
+Perbaikan agar aplikasi dapat di-build dan dijalankan tanpa toolchain C
+(GCC). Build `CGO_ENABLED=0` di mesin Windows tanpa gcc sebelumnya gagal
+pada koneksi WhatsApp karena stub `mattn/go-sqlite3` merebut nama driver
+`sqlite3` di store whatsmeow.
+
+### Perubahan
+
+- `backend/services/wa.go`: driver SQLite store diganti dari
+  `modernc.org/sqlite` ke `github.com/glebarez/go-sqlite` (fork pure-Go
+  yang sama dengan driver GORM) dan didaftarkan sebagai driver `sqlite3`.
+  `sessionDSN` memakai format `file:<path>?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)`.
+- `backend/database/database.go`: driver GORM `gorm.io/driver/sqlite`
+  (mattn) diganti `github.com/glebarez/sqlite`.
+- `go.mod`: menambah `github.com/glebarez/sqlite` dan
+  `github.com/glebarez/go-sqlite`. `mattn/go-sqlite3` tersisa hanya
+  sebagai dependency indirect dari `go.mau.fi/util/dbutil/litestream`
+  (subfolder dengan build tag — tidak ikut ter-compile pada build normal).
+- `frontend/src/pages/Dashboard.tsx`: tombol simpan konfigurasi AI tidak
+  lagi terkunci saat hanya key DeepSeek yang terisi
+  (`disabled={!apiKey && !deepseekKey}`).
+
+### Verifikasi
+
+- `CGO_ENABLED=0 go build ./backend` berhasil.
+- Inisialisasi store whatsmeow dengan driver `sqlite3` berhasil tanpa
+  error stub: `STORE_OK: devices=0` (jalur QR siap).
+- Sesi lama tetap terbaca: `sessionDSN` agent 1 memakai file sesi lama.
+
+---
+
 ## Catatan implementasi
 
 - Tabel baru: `learning_runs`, `learning_patterns`, `learning_snapshots`,
   `learning_configs`, `meta_conversions` (+ 6 kolom `meta_*` di `agents`).
 - File utama: `backend/services/learning.go`, `backend/handlers/learning.go`,
   `backend/handlers/contact_control.go`, `backend/services/meta.go`,
-  `backend/handlers/meta.go`.
-- Tidak ada dependency baru (go.mod tidak berubah).
+  `backend/handlers/meta.go`, `backend/services/wa.go`.
+- Dependency Go baru: `github.com/glebarez/sqlite`,
+  `github.com/glebarez/go-sqlite` (SQLite pure-Go, tanpa CGO). Frontend
+  tidak berubah dependency-nya.
 - Test unit: `go test ./backend/handlers/ -run TestShouldAllowHumanHandoff`
   (butuh `JWT_SECRET` minimal 32 karakter di environment).
