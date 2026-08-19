@@ -1,6 +1,6 @@
-# Release Notes — Learning Engine, Kontrol Kontak, Meta CAPI, Stabilitas Build
+# Release Notes — Learning Engine, Kontrol Kontak, Meta CAPI, Media, Stabilitas Build
 
-Ringkasan teknis empat branch fitur di atas `e31d073`, ditulis berdasarkan
+Ringkasan teknis lima branch fitur di atas `e31d073`, ditulis berdasarkan
 implementasi aktual di kode.
 
 ---
@@ -227,13 +227,58 @@ pada koneksi WhatsApp karena stub `mattn/go-sqlite3` merebut nama driver
 
 ---
 
+
+## 5. Panel Media — `feature/media-assets`
+
+### Deskripsi
+
+UI untuk mengelola media asset (katalog, foto produk, video) yang dikirim
+AI lewat directive `[[SEND_MEDIA:label]]`. Backend-nya sudah ada sejak
+versi dasar; branch ini menambahkan panel dashboard + endpoint serve file
+untuk preview.
+
+### Perubahan
+
+- `frontend/src/components/MediaAssetsPanel.tsx` (baru): daftar asset
+  (thumbnail, label, trigger keys, caption, ukuran, tipe), form unggah
+  (file + preview, label wajib, trigger keys, caption default, urutan),
+  tombol hapus. Dipasang di tab "Media" dashboard.
+- `frontend/src/hooks.ts`: `useMediaAssets`, `useUploadMediaAsset`,
+  `useDeleteMediaAsset` (FormData multipart).
+- `frontend/src/types.ts`: interface `MediaAsset`.
+- `backend/handlers/media_assets.go`: handler `ServeMediaAssetFile`
+  (publik + token query, pola sama dengan gambar produk); upload membaca
+  field `sort_order` dari form.
+- `backend/main.go`: route `GET /agents/:id/media-assets/:assetId/file`.
+- `backend/handlers/media_directive_test.go` (baru): test unit
+  `parseMediaLabels` (6 kasus) dan `buildFinalText` (6 kasus).
+
+### Verifikasi
+
+- Upload via multipart → id, label, tipe, ukuran, urutan tersimpan.
+- List asset → 1 baris; serve file → 200 dengan byte PNG valid; delete →
+  list kosong.
+- `CGO_ENABLED=0` build + `go vet` + test unit + frontend build bersih.
+
+### Catatan
+
+- Label adalah kunci bagi AI: arahkan persona untuk memakai
+  `[[SEND_MEDIA:<label>]]` (mis. `katalog dtf`). Trigger keys membantu AI
+  memilih media dari konteks percakapan.
+- AI sudah diinstruksikan soal directive ini sejak versi dasar (Layer 6
+  Media Directive di `buildSystemPrompt`): menulis teks dulu, directive di
+  akhir, satu directive per balasan.
+
+---
+
 ## Catatan implementasi
 
 - Tabel baru: `learning_runs`, `learning_patterns`, `learning_snapshots`,
   `learning_configs`, `meta_conversions` (+ 6 kolom `meta_*` di `agents`).
 - File utama: `backend/services/learning.go`, `backend/handlers/learning.go`,
   `backend/handlers/contact_control.go`, `backend/services/meta.go`,
-  `backend/handlers/meta.go`, `backend/services/wa.go`.
+  `backend/handlers/meta.go`, `backend/services/wa.go`,
+  `frontend/src/components/MediaAssetsPanel.tsx`.
 - Dependency Go baru: `github.com/glebarez/sqlite`,
   `github.com/glebarez/go-sqlite` (SQLite pure-Go, tanpa CGO). Frontend
   tidak berubah dependency-nya.

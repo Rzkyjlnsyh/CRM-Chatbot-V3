@@ -1,6 +1,6 @@
 # Panduan Integrasi Branch Fitur
 
-Empat branch dibuat di atas commit `e31d073` (base yang sama dengan kode
+Lima branch dibuat di atas commit `e31d073` (base yang sama dengan kode
 yang sedang dikembangkan). Branch memakai file baru sebanyak mungkin dan
 perubahan minimal pada file bersama, sehingga integrasi bersifat terarah
 dan konflik yang mungkin muncul kecil.
@@ -13,6 +13,7 @@ dan konflik yang mungkin muncul kecil.
 | `feature/meta-capi` | Meta Conversions API | 4 | 7 |
 | `feature/cs-control` | Kontrol AI per kontak + perbaikan gate handoff | 2 | 4 |
 | `feature/stability-fixes` | Build tanpa CGO (store WhatsApp) + tombol simpan AI | 0 | 6 |
+| `feature/media-assets` | Panel Media (unggah/kelola media untuk `SEND_MEDIA`) | 2 | 5 |
 
 ## Urutan integrasi
 
@@ -24,6 +25,7 @@ file yang berbeda), tetapi disarankan:
 2. feature/cs-control
 3. feature/meta-capi
 4. feature/stability-fixes
+5. feature/media-assets
 ```
 
 ## Perintah
@@ -34,20 +36,22 @@ git merge origin/feature/learning-engine
 git merge origin/feature/cs-control
 git merge origin/feature/meta-capi
 git merge origin/feature/stability-fixes
+git merge origin/feature/media-assets
 ```
 
 ## Potensi konflik dan penyelesaiannya
 
 | File | Kemungkinan konflik | Penyelesaian |
 |---|---|---|
-| `backend/main.go` | Baris route baru (blok `learning/*`, `meta/*`, `contacts/:sender/*`) | Pertahankan kedua sisi; urutan route tidak berpengaruh |
+| `backend/main.go` | Baris route baru (`learning/*`, `meta/*`, `contacts/:sender/*`, serve file media) | Pertahankan kedua sisi; urutan route tidak berpengaruh |
 | `backend/models/models.go` | Enam field `Meta*` di struct `Agent` (ditempatkan di akhir struct, setelah `WebhookSecret`) | Pertahankan kedua sisi |
 | `backend/database/database.go` | Baris `AutoMigrate` (4 model learning + `MetaConversion`) | Gabungkan daftar model |
 | `backend/handlers/agents.go` | `shouldAllowHumanHandoff` dan `pauseAIForManualReply` | Ambil versi branch (berisi perbaikan) |
 | `backend/services/wa.go` | Driver SQLite store WhatsApp (modernc → glebarez, `sessionDSN` format `file:` + pragma) | Ambil versi branch |
+| `backend/handlers/media_assets.go` | Upload membaca `sort_order`; tambahan handler serve file | Ambil versi branch |
 | `go.mod` / `go.sum` | `github.com/glebarez/sqlite` + `github.com/glebarez/go-sqlite` ditambahkan; `gorm.io/driver/sqlite` (mattn) dihapus | Ambil versi branch |
-| `frontend/src/pages/Dashboard.tsx` | Tab baru (`learning`, `meta`) + import komponen; tombol simpan AI (`disabled={!apiKey && !deepseekKey}`) | Pertahankan kedua sisi |
-| `frontend/src/hooks.ts` | Blok hooks baru di akhir file + import type | Pertahankan kedua sisi |
+| `frontend/src/pages/Dashboard.tsx` | Tab baru (`learning`, `meta`, `media`) + import komponen; tombol simpan AI | Pertahankan kedua sisi |
+| `frontend/src/hooks.ts` | Blok hooks baru (learning, meta, media) di akhir file + import type | Pertahankan kedua sisi |
 | `frontend/src/components/InboxPanel.tsx` | Tombol Jeda AI / Lanjutkan AI / Ke CS; penghapusan variabel `oldestId` yang tidak terpakai | Ambil versi branch |
 
 Catatan: ketiga branch menyertakan perbaikan yang sama pada
