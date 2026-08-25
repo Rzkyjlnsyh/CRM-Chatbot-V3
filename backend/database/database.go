@@ -84,6 +84,8 @@ func Init() {
 		&models.ShippingCity{},
 		&models.ShippingOrder{},
 		&models.MediaAsset{},
+		&models.LearningRun{}, &models.LearningPattern{}, &models.LearningSnapshot{}, &models.LearningConfig{},
+		&models.PatternUsageLog{},
 		&models.GroupGuardConfig{}, &models.GroupModerationLog{},
 		&models.MetaConversionEvent{},
 	)

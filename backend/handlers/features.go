@@ -624,6 +624,9 @@ func InboxSendMedia(c *gin.Context) {
 		FileName: fh.Filename, Mimetype: mimetype,
 	}).Error
 
+	// Real-time learning: balasan CS manusia baru = materi belajar terbaru.
+	services.MaybeTriggerIncrementalLearning(id)
+
 	var cnt int64
 	database.DB.Model(&models.Handoff{}).Where("agent_id = ? AND sender = ?", id, to).Count(&cnt)
 	if cnt == 0 {

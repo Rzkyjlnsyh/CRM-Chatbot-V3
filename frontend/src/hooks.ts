@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from './services/api';
-import type { Analytics, AIMetrics, Contact, ChatMsg, ConversationBrief, Broadcast, BroadcastDetailData, BroadcastSafetyForm, BroadcastConsentSummary, WAGroup, GroupGuardConfig, GroupModerationLog, LabelInfo, ScheduledMessage, AutoReply, Template, SavedContact, SavedContactsResp, LeadStage, FollowUp, Agent, KnowledgeItem, Handoff, CrawlJob, CrawlPage, KnowledgeUsage, ScheduledStatus, ApiSettings, Flow, Product, ProductOrder, AIForm, AIFormSubmission, MediaAsset } from './types';
+import type { Analytics, AIMetrics, Contact, ChatMsg, ConversationBrief, Broadcast, BroadcastDetailData, BroadcastSafetyForm, BroadcastConsentSummary, WAGroup, GroupGuardConfig, GroupModerationLog, LabelInfo, ScheduledMessage, AutoReply, Template, SavedContact, SavedContactsResp, LeadStage, FollowUp, Agent, KnowledgeItem, Handoff, CrawlJob, CrawlPage, KnowledgeUsage, ScheduledStatus, ApiSettings, Flow, Product, ProductOrder, AIForm, AIFormSubmission, MediaAsset, LearningStatus, LearningScore, LearningRun, LearningRunDetail, LearningPattern, LearningSnapshot, LearningConfig, MetaConfigData } from './types';
 
 type ContactList = { number: string; name: string }[];
 
@@ -1105,5 +1105,178 @@ export function useDeleteMediaAsset(agentId: number) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['media-assets', agentId] });
     },
+  });
+}
+
+// ---- Learning Engine hooks (single-tenant) ----
+
+export function useLearningStatus(agentId: number) {
+  return useQuery<LearningStatus>({
+    queryKey: ['learning-status', agentId],
+    queryFn: async () => (await api.get(`/agents/${agentId}/learning/status`)).data.data,
+    enabled: !!agentId,
+  });
+}
+
+export function useLearningScore(agentId: number) {
+  return useQuery<LearningScore>({
+    queryKey: ['learning-score', agentId],
+    queryFn: async () => (await api.get(`/agents/${agentId}/learning/score`)).data.data,
+    enabled: !!agentId,
+    refetchInterval: 30_000,
+  });
+}
+
+export function useLearningRuns(agentId: number) {
+  return useQuery<LearningRun[]>({
+    queryKey: ['learning-runs', agentId],
+    queryFn: async () => (await api.get(`/agents/${agentId}/learning/runs`)).data.data,
+    enabled: !!agentId,
+  });
+}
+
+export function useLearningRun(agentId: number, runId: number) {
+  return useQuery<LearningRunDetail>({
+    queryKey: ['learning-run', agentId, runId],
+    queryFn: async () => (await api.get(`/agents/${agentId}/learning/runs/${runId}`)).data.data,
+    enabled: !!agentId && !!runId,
+  });
+}
+
+export function useLearningPatterns(agentId: number, status?: string) {
+  return useQuery<LearningPattern[]>({
+    queryKey: ['learning-patterns', agentId, status],
+    queryFn: async () => (await api.get(`/agents/${agentId}/learning/patterns`, { params: status ? { status } : {} })).data.data,
+    enabled: !!agentId,
+  });
+}
+
+export function useLearningSnapshots(agentId: number) {
+  return useQuery<LearningSnapshot[]>({
+    queryKey: ['learning-snapshots', agentId],
+    queryFn: async () => (await api.get(`/agents/${agentId}/learning/snapshots`)).data.data,
+    enabled: !!agentId,
+  });
+}
+
+export function useLearningConfig(agentId: number) {
+  return useQuery<LearningConfig>({
+    queryKey: ['learning-config', agentId],
+    queryFn: async () => (await api.get(`/agents/${agentId}/learning/config`)).data.data,
+    enabled: !!agentId,
+  });
+}
+
+export function useStartLearning(agentId: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: { start_date?: string; end_date?: string }) =>
+      (await api.post(`/agents/${agentId}/learning/run`, body)).data,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['learning-runs', agentId] });
+      qc.invalidateQueries({ queryKey: ['learning-status', agentId] });
+      qc.invalidateQueries({ queryKey: ['learning-patterns', agentId] });
+    },
+  });
+}
+
+export function useApplyPattern(agentId: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (patternId: number) =>
+      (await api.post(`/agents/${agentId}/learning/patterns/${patternId}/apply`)).data,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['learning-patterns', agentId] });
+      qc.invalidateQueries({ queryKey: ['learning-status', agentId] });
+      qc.invalidateQueries({ queryKey: ['learning-score', agentId] });
+    },
+  });
+}
+
+export function useRejectPattern(agentId: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (patternId: number) =>
+      (await api.post(`/agents/${agentId}/learning/patterns/${patternId}/reject`)).data,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['learning-patterns', agentId] }),
+  });
+}
+
+export function useApplyAllPatterns(agentId: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (minConfidence: number) =>
+      (await api.post(`/agents/${agentId}/learning/patterns/apply-all`, { min_confidence: minConfidence })).data,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['learning-patterns', agentId] });
+      qc.invalidateQueries({ queryKey: ['learning-status', agentId] });
+      qc.invalidateQueries({ queryKey: ['learning-score', agentId] });
+    },
+  });
+}
+
+export function useCreateSnapshot(agentId: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (label: string) =>
+      (await api.post(`/agents/${agentId}/learning/snapshots`, { label })).data,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['learning-snapshots', agentId] }),
+  });
+}
+
+export function useRollbackSnapshot(agentId: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (snapshotId: number) =>
+      (await api.post(`/agents/${agentId}/learning/snapshots/${snapshotId}/rollback`)).data,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['learning-snapshots', agentId] });
+      qc.invalidateQueries({ queryKey: ['learning-status', agentId] });
+    },
+  });
+}
+
+export function useSaveLearningConfig(agentId: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: Partial<LearningConfig>) =>
+      (await api.put(`/agents/${agentId}/learning/config`, body)).data,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['learning-config', agentId] }),
+  });
+}
+
+// ---- Meta CAPI hooks (single-tenant) ----
+
+export interface MetaConfigInput {
+  pixel_id: string;
+  access_token: string;
+  test_event_code: string;
+  conv_labels: string;
+  event_name: string;
+  label_events: Record<string, string>;
+}
+
+export function useMetaConfig(agentId: number) {
+  return useQuery<MetaConfigData>({
+    queryKey: ['meta-config', agentId],
+    queryFn: async () => (await api.get(`/agents/${agentId}/meta`)).data.data,
+    enabled: !!agentId,
+  });
+}
+
+export function useSaveMetaConfig(agentId: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: MetaConfigInput) =>
+      (await api.put(`/agents/${agentId}/meta`, body)).data,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['meta-config', agentId] }),
+  });
+}
+
+export function useTestMetaEvent(agentId: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async () => (await api.post(`/agents/${agentId}/meta/test`)).data,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['meta-config', agentId] }),
   });
 }

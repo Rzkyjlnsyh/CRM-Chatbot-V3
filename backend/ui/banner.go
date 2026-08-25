@@ -121,7 +121,7 @@ func LicenseError(reason string) {
 		"Pastikan .env di root project, lalu restart",
 		"terminal dev setelah menyimpan.",
 		"",
-		"Docs  docs/PANDUAN-INSTALASI.pdf",
+		"Docs  docs/INSTALL-LOCAL.md",
 	)
 	printBox(os.Stderr, colorRed, "SlaluDiskon", body)
 	os.Exit(1)

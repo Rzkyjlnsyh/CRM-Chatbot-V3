@@ -2,7 +2,7 @@
 
 Panduan ini berlaku untuk **macOS**, **Windows**, dan **Linux**.
 
-Ringkasan PDF (untuk pembeli): [`PANDUAN-INSTALASI.pdf`](PANDUAN-INSTALASI.pdf).
+Panduan ini adalah referensi utama untuk setup lokal dan deployment internal.
 
 **Cara yang disarankan:** buka project di **Visual Studio Code**, lalu jalankan semua perintah lewat **Terminal di dalam VS Code**.
 
@@ -76,13 +76,13 @@ npm run setup:env
 | `JWT_SECRET` | Kunci acak **minimal 32 karakter** — lihat cara buat di bawah |
 | `SUPERADMIN_USERNAME` | Username login dashboard |
 | `SUPERADMIN_PASSWORD` | Password admin (kuat, min. 12 karakter) |
-| `LICENSE_KEY` | Salin dari `SOURCE-LICENSE` / dashboard member (contoh `WA-xxxx…`) |
-| `LICENSE_API_SECRET` | **Wajib** — secret API lisensi dari manifest / dashboard member SlaluDiskon (bukan dikarang sendiri) |
+| `LICENSE_KEY` | Isi dari manifest handover jika build yang dipakai mengaktifkan runtime license |
+| `LICENSE_API_SECRET` | Secret API lisensi dari manifest handover, jika runtime license dipakai |
 | `LICENSE_OWNER` | Nama pemilik lisensi |
 | `LICENSE_EMAIL` | Email pemilik lisensi |
 | `LICENSE_ORDER_ID` | Nomor invoice/order (jika ada) |
-| `LICENSE_API_URL` | URL API lisensi resmi (biasanya `https://api.slaludiskon.com`) |
-| `LICENSE_RESPONSE_SIGNING_PUBLIC_KEY` | Public key resmi dari rilis — jangan dikarang |
+| `LICENSE_API_URL` | URL API lisensi sesuai deployment, jika runtime license dipakai |
+| `LICENSE_RESPONSE_SIGNING_PUBLIC_KEY` | Public key resmi dari manifest handover, jika runtime license dipakai |
 
 Backend dapat membuat database/tabel otomatis jika user MySQL punya izin `CREATE`.
 
@@ -206,7 +206,7 @@ npm run dev
 
 | Gejala | Solusi |
 |--------|--------|
-| `LICENSE_KEY kosong` / banner **LISENSI BELUM AKTIF** | Isi `LICENSE_KEY` **dan** `LICENSE_API_SECRET` dari manifest/dashboard member ke `.env`, lalu restart `npm run dev` |
+| `LICENSE_KEY kosong` / banner **LISENSI BELUM AKTIF** | Build yang dipakai mengaktifkan runtime license. Isi `LICENSE_KEY` dan `LICENSE_API_SECRET` dari manifest handover, lalu restart `npm run dev` |
 | `Invalid signature` | Public key lisensi harus yang resmi dari rilis |
 | Banner **SERVER SIAP** | Lisensi OK — buka dashboard `http://127.0.0.1:5173` |
 | MySQL gagal connect | Cek service MySQL + `DB_*` di `.env` |
@@ -223,7 +223,7 @@ Jangan membagikan:
 - `.env`
 - Database / dump
 - Sesi WhatsApp (`data/`, file session)
-- Manifest / key lisensi pribadi
+- Manifest / key lisensi deployment
 
 ---
 

@@ -32,6 +32,10 @@ func OnLabelAssoc(agentID uint, sender, labelID string, labeled bool) {
 	if labeled {
 		var cl models.ChatLabel
 		database.DB.Where(models.ChatLabel{AgentID: agentID, LabelID: labelID, Sender: sender}).FirstOrCreate(&cl)
+		// Meta CAPI: label konversi menempel → kirim event ke Meta Ads.
+		if services.IsMetaConvLabel(labelID) {
+			services.FireMetaConversion(agentID, sender, labelID)
+		}
 	} else {
 		database.DB.Where("agent_id = ? AND label_id = ? AND sender = ?", agentID, labelID, sender).Delete(&models.ChatLabel{})
 	}

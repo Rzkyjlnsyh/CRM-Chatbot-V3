@@ -1,10 +1,12 @@
 package handlers
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
 
+	"wa-assistant/backend/database"
 	"wa-assistant/backend/services"
 
 	"github.com/gin-gonic/gin"
@@ -64,24 +66,41 @@ func AdminGetMetaTracking(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(200, gin.H{
+	c.JSON(200, gin.H{"data": gin.H{
 		"enabled":          cfg.Enabled,
 		"pixel_id":         cfg.PixelID,
 		"graph_version":    cfg.GraphVersion,
 		"test_event_code":  cfg.TestEventCode,
 		"token_configured": cfg.AccessToken != "",
+		"conv_labels":      database.GetAppSetting("meta_conv_labels", ""),
+		"event_name":       database.GetAppSetting("meta_event_name", "Purchase"),
+		"label_events":     metaLabelEventsMap(),
+		"allowed":          true, // single-tenant: tanpa gating paket SaaS
 		"stats":            services.GetMetaTrackingStats(),
-	})
+	}})
+}
+
+// metaLabelEventsMap membaca pemetaan label→event (JSON) dari AppSetting.
+func metaLabelEventsMap() map[string]string {
+	raw := database.GetAppSetting("meta_label_events", "")
+	m := map[string]string{}
+	if raw != "" {
+		_ = json.Unmarshal([]byte(raw), &m)
+	}
+	return m
 }
 
 func AdminSetMetaTracking(c *gin.Context) {
 	var req struct {
-		Enabled          bool   `json:"enabled"`
-		PixelID          string `json:"pixel_id"`
-		AccessToken      string `json:"access_token"`
-		GraphVersion     string `json:"graph_version"`
-		TestEventCode    string `json:"test_event_code"`
-		ClearAccessToken bool   `json:"clear_access_token"`
+		Enabled          bool              `json:"enabled"`
+		PixelID          string            `json:"pixel_id"`
+		AccessToken      string            `json:"access_token"`
+		GraphVersion     string            `json:"graph_version"`
+		TestEventCode    string            `json:"test_event_code"`
+		ClearAccessToken bool              `json:"clear_access_token"`
+		ConvLabels       string            `json:"conv_labels"`
+		EventName        string            `json:"event_name"`
+		LabelEvents      map[string]string `json:"label_events"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(400, gin.H{"error": "Data konfigurasi tidak valid"})
@@ -96,15 +115,27 @@ func AdminSetMetaTracking(c *gin.Context) {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(200, gin.H{
-		"message":          "Pengaturan Meta Pixel dan CAPI disimpan",
+	database.SetAppSetting("meta_conv_labels", strings.TrimSpace(req.ConvLabels))
+	if ev := strings.TrimSpace(req.EventName); ev != "" {
+		database.SetAppSetting("meta_event_name", ev)
+	}
+	if req.LabelEvents != nil {
+		if b, e := json.Marshal(req.LabelEvents); e == nil {
+			database.SetAppSetting("meta_label_events", string(b))
+		}
+	}
+	c.JSON(200, gin.H{"message": "Pengaturan Meta Pixel dan CAPI disimpan", "data": gin.H{
 		"enabled":          cfg.Enabled,
 		"pixel_id":         cfg.PixelID,
 		"graph_version":    cfg.GraphVersion,
 		"test_event_code":  cfg.TestEventCode,
 		"token_configured": cfg.AccessToken != "",
+		"conv_labels":      database.GetAppSetting("meta_conv_labels", ""),
+		"event_name":       database.GetAppSetting("meta_event_name", "Purchase"),
+		"label_events":     metaLabelEventsMap(),
+		"allowed":          true,
 		"stats":            services.GetMetaTrackingStats(),
-	})
+	}})
 }
 
 func AdminTestMetaTracking(c *gin.Context) {

@@ -108,7 +108,7 @@ func Verify() bool {
 
 	key := strings.TrimSpace(config.Env("LICENSE_KEY", ""))
 	if key == "" {
-		setVerificationState(false, "no_key", "LICENSE_KEY kosong. Beli lisensi di slaludiskon.com", "")
+		setVerificationState(false, "no_key", "LICENSE_KEY kosong. Konfigurasi runtime license belum aktif.", "")
 		log.Printf("[license] GAGAL: %s", VerifyMessage)
 		return false
 	}

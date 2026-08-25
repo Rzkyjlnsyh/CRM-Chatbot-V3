@@ -201,6 +201,8 @@ func OnWAOwnMessage(agentID uint, recipient types.JID, in services.IncomingMessa
 	}).Error; err != nil {
 		log.Printf("Gagal mencatat balasan manual perangkat (agent %d, %s): %v", agentID, num, err)
 	}
+	// Real-time learning: balasan CS manusia baru = materi belajar terbaru.
+	services.MaybeTriggerIncrementalLearning(agentID)
 }
 
 func pauseAIForManualReply(agentID uint, sender string) time.Time {

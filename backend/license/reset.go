@@ -31,7 +31,7 @@ func Reset() error {
 		return fmt.Errorf("LICENSE_KEY kosong")
 	}
 	if !config.EnvBool("LICENSE_PUBLIC_RESET_ENABLED", false) {
-		return fmt.Errorf("reset perangkat dilakukan dari dashboard member LMS; endpoint reset publik sedang dinonaktifkan")
+		return fmt.Errorf("reset perangkat dilakukan dari sistem lisensi deployment; endpoint reset publik sedang dinonaktifkan")
 	}
 	machine, _, err := machineFingerprints()
 	if err != nil {

@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -30,12 +31,15 @@ func TestMachineFingerprintUsesPersistentInstallationID(t *testing.T) {
 	if first == "" || first != second || legacy == "" || first == legacy {
 		t.Fatalf("unexpected fingerprints current=%q second=%q legacy=%q", first, second, legacy)
 	}
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("machine ID permissions = %o, want 600", info.Mode().Perm())
+	if runtime.GOOS != "windows" {
+		// chmod 600 hanya berlaku di POSIX; Windows mengabaikan mode file.
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o600 {
+			t.Fatalf("machine ID permissions = %o, want 600", info.Mode().Perm())
+		}
 	}
 }
 
