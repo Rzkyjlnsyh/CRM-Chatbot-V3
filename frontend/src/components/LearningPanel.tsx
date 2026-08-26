@@ -1,4 +1,4 @@
-import { useState, type ReactElement } from 'react';
+import { useState, useEffect, type ReactElement } from 'react';
 import {
   Box, Button, Chip, CircularProgress, Dialog, DialogActions,
   DialogContent, DialogTitle, Divider, FormControlLabel, Grid,
@@ -23,7 +23,7 @@ import TimerIcon from '@mui/icons-material/TimerOutlined';
 import {
   useLearningStatus, useLearningScore, useLearningPatterns, useLearningSnapshots, useLearningConfig,
   useStartLearning, useApplyPattern, useRejectPattern, useApplyAllPatterns,
-  useCreateSnapshot, useRollbackSnapshot, useSaveLearningConfig,
+  useCreateSnapshot, useRollbackSnapshot, useSaveLearningConfig, useLabels,
 } from '../hooks';
 import PageHeader from './PageHeader';
 import { swalConfirm, swalToast } from '../services/swal';
@@ -127,6 +127,18 @@ export default function LearningPanel({ agentId }: { agentId: number }) {
   const { data: patterns } = useLearningPatterns(agentId, 'suggested');
   const { data: snapshots } = useLearningSnapshots(agentId);
   const { data: config } = useLearningConfig(agentId);
+  const waSync = useLabels(agentId);
+  const waLabels = waSync.data;
+  const [closingLabels, setClosingLabels] = useState('');
+
+  useEffect(() => {
+    if (config?.closing_labels !== undefined) setClosingLabels(config.closing_labels);
+  }, [config?.closing_labels]);
+
+  useEffect(() => {
+    if (agentId) waSync.mutate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentId]);
 
   const startLearning = useStartLearning(agentId);
   const applyPattern = useApplyPattern(agentId);
@@ -147,8 +159,13 @@ export default function LearningPanel({ agentId }: { agentId: number }) {
     startLearning.mutate(
       { start_date: startDate || undefined, end_date: endDate || undefined },
       {
-        onSuccess: () => {
-          swalToast('Learning dimulai di background. Pola akan muncul beberapa saat lagi — cek tab Runs/Patterns.');
+        onSuccess: (resp: unknown) => {
+          const d = (resp as { data?: { human_chats?: number; contacts?: number; total_chats?: number } })?.data;
+          if (d && d.human_chats !== undefined && d.human_chats > 0) {
+            swalToast(`Menganalisa ${d.human_chats} chat CS dari ${d.contacts} kontak — pola muncul beberapa saat lagi, lihat kartu status.`);
+          } else {
+            swalToast(`Tidak ada chat CS manusia dalam rentang ini (${d?.total_chats ?? 0} chat total, ${d?.contacts ?? 0} kontak). Perluas rentang tanggal lalu coba lagi.`, 'warning');
+          }
         },
         onError: (err: unknown) => swalToast(apiErrorMessage(err, 'Gagal menjalankan learning'), 'error'),
       }
@@ -249,6 +266,39 @@ export default function LearningPanel({ agentId }: { agentId: number }) {
           </Grid>
         </Grid>
       </Paper>
+
+      {status?.last_run && (
+        <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
+          <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
+            {status.last_run.status === 'running' || status.last_run.status === 'pending' ? (
+              <>
+                <CircularProgress size={16} />
+                <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                  Learning sedang berjalan… pola muncul otomatis di tab "Pola" bila selesai.
+                </Typography>
+              </>
+            ) : status.last_run.status === 'completed' ? (
+              <>
+                <Typography variant="body2" sx={{ fontWeight: 700, color: 'success.main' }}>
+                  ✅ Selesai — {status.last_run.pattern_count} pola ditemukan
+                </Typography>
+                <Typography variant="body2" color="text.secondary">
+                  dari {status.last_run.human_chats} chat CS · {status.last_run.total_chats} chat total
+                </Typography>
+              </>
+            ) : (
+              <>
+                <Typography variant="body2" sx={{ fontWeight: 700, color: 'error.main' }}>
+                  ❌ Gagal
+                </Typography>
+                <Typography variant="body2" color="error">
+                  {status.last_run.error || 'Terjadi kesalahan. Coba rentang tanggal lain lalu jalankan ulang.'}
+                </Typography>
+              </>
+            )}
+          </Stack>
+        </Paper>
+      )}
 
       {score && (
         <Paper variant="outlined" sx={{ p: 2, mb: 2, background: 'linear-gradient(135deg, rgba(33,150,243,0.06), rgba(76,175,80,0.06))' }}>
@@ -471,6 +521,28 @@ export default function LearningPanel({ agentId }: { agentId: number }) {
                 <Slider value={config.lookback_days} min={7} max={90} step={1}
                   onChange={(_, v) => saveConfig.mutate({ lookback_days: v as number })} />
               </Box>
+
+              <Divider />
+
+              <TextField label="Label closing WhatsApp (dipisah koma)" size="small" fullWidth
+                value={config.closing_labels ?? ''}
+                onChange={(e) => setClosingLabels(e.target.value)}
+                onBlur={() => saveConfig.mutate({ closing_labels: closingLabels })}
+                helperText="Kontak yang diberi salah satu label ini oleh CS dihitung closing — dipakai skor agent & materi belajar." />
+              {waLabels && waLabels.length > 0 && (
+                <Box>
+                  <Typography variant="caption" color="text.secondary">
+                    Label asli WhatsApp di perangkat ({waLabels.length}):
+                  </Typography>
+                  <Stack direction="row" spacing={0.5} sx={{ mt: 0.5, flexWrap: 'wrap', rowGap: 0.5 }}>
+                    {waLabels.slice(0, 24).map((l) => (
+                      <Chip key={l.label_id} size="small" label={`${l.name} (${l.count})`}
+                        onClick={() => { setClosingLabels((v) => (v ? v + ', ' : '') + l.name); saveConfig.mutate({ closing_labels: (config.closing_labels ? config.closing_labels + ', ' : '') + l.name }); }}
+                        title="Klik untuk menambahkan sebagai label closing" />
+                    ))}
+                  </Stack>
+                </Box>
+              )}
             </Stack>
           </Paper>
         </Stack>

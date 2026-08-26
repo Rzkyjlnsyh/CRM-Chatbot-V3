@@ -67,6 +67,7 @@ type LearningConfig struct {
 	ScheduleEnabled         bool      `gorm:"not null;default:false" json:"schedule_enabled"`
 	ScheduleCron            string    `gorm:"size:80" json:"schedule_cron"`             // "0 2 * * *"
 	LookbackDays            int       `gorm:"not null;default:30" json:"lookback_days"` // analisa chat N hari terakhir
+	ClosingLabels           string    `gorm:"size:255" json:"closing_labels"`           // label WA penanda closing (dipisah koma)
 	UpdatedAt               time.Time `json:"updated_at"`
 }
 

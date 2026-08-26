@@ -75,17 +75,27 @@ func StartLearning(c *gin.Context) {
 		return
 	}
 
+	// Hitung materi di depan (sinkron) supaya user langsung tahu berapa kontak
+	// & chat yang akan dianalisa — bukan menunggu tanpa kejelasan.
+	var totalChats, humanChats, contacts int64
+	database.DB.Model(&models.ChatHistory{}).Where("agent_id = ? AND created_at >= ? AND created_at <= ?", agentID, *startDate, *endDate).Count(&totalChats)
+	database.DB.Model(&models.ChatHistory{}).Where("agent_id = ? AND from_human = ? AND reply <> '' AND created_at >= ? AND created_at <= ?", agentID, true, *startDate, *endDate).Count(&humanChats)
+	database.DB.Model(&models.ChatHistory{}).Where("agent_id = ? AND created_at >= ? AND created_at <= ?", agentID, *startDate, *endDate).Distinct("sender").Count(&contacts)
+
 	result, err := services.EnqueueLearningRun(agentID, startDate, endDate)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(202, gin.H{"data": gin.H{
-		"run_id":     result.ID,
-		"status":     "pending",
-		"message":    "Learning dimulai di background. Cek status secara berkala.",
-		"start_date": startDate,
-		"end_date":   endDate,
+		"run_id":       result.ID,
+		"status":       "pending",
+		"message":      "Learning dimulai di background. Cek status secara berkala.",
+		"start_date":   startDate,
+		"end_date":     endDate,
+		"total_chats":  totalChats,
+		"human_chats":  humanChats,
+		"contacts":     contacts,
 	}})
 }
 

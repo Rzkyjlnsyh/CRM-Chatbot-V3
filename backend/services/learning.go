@@ -295,13 +295,17 @@ var noiseReplies = []string{
 
 // loadAISuccessChats mengambil chat yang DIBALAS AI dan pelanggannya kemudian
 // closing (ada ClosingRecord atau tahap kontak = closing). Sumber belajar
-// "terbukti berhasil", bukan sekadar gaya CS manusia. Balasan fallback/hold
-// (bukan pelayanan) disaring agar tidak dipelajari.
+// loadAISuccessChats — kontak closing = gabungan: ClosingRecord (transaksi
+// terdeteksi), tahap "customer", DAN label WA closing yang dipasang CS manusia.
 func loadAISuccessChats(agentID uint, startDate, endDate *time.Time) []models.ChatHistory {
 	seen := make(map[string]bool)
 	var recSenders []string
 	database.DB.Model(&models.ClosingRecord{}).Where("agent_id = ?", agentID).Pluck("sender", &recSenders)
 	for _, s := range recSenders {
+		seen[s] = true
+	}
+	// Label WA closing (dipasang CS manusia via WhatsApp, tersinkron).
+	for _, s := range labelClosingSenders(agentID, nil) {
 		seen[s] = true
 	}
 	// Tahap closing chatloop = "customer" (tahap baku). Chat AI yang
@@ -814,6 +818,83 @@ func RollbackToSnapshot(agentID, snapshotID uint) (*models.LearningSnapshot, err
 	return &snap, nil
 }
 
+// DefaultClosingLabels = nama label WhatsApp penanda closing bawaan. Bisa
+// diubah per agent dari panel Konfigurasi Learning (bukan hardcode kaku).
+const DefaultClosingLabels = "Transfer,Closing,Deal,Lunas,DP,Selesai"
+
+// ClosingLabelNames memecah string label closing jadi set nama (trim + lower).
+func ClosingLabelNames(raw string) map[string]bool {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		raw = DefaultClosingLabels
+	}
+	out := map[string]bool{}
+	for _, p := range strings.Split(raw, ",") {
+		n := strings.ToLower(strings.TrimSpace(p))
+		if n != "" {
+			out[n] = true
+		}
+	}
+	return out
+}
+
+// labelClosingSenders = kontak unik yang menyandang label WA closing (dipasang
+// CS manusia via WhatsApp, tersinkron ke sistem). since != nil membatasi ke
+// kontak yang aktif chat sejak tanggal itu (label tak ber-tanggal).
+func labelClosingSenders(agentID uint, since *time.Time) []string {
+	cfg := GetLearningConfig(agentID)
+	names := ClosingLabelNames(cfg.ClosingLabels)
+	keys := make([]string, 0, len(names))
+	for k := range names {
+		keys = append(keys, k)
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	var labelIDs []string
+	database.DB.Model(&models.Label{}).Where("LOWER(name) IN ?", keys).Pluck("label_id", &labelIDs)
+	if len(labelIDs) == 0 {
+		return nil
+	}
+	q := database.DB.Model(&models.ChatLabel{}).
+		Where("agent_id = ? AND label_id IN ?", agentID, labelIDs)
+	if since != nil {
+		// Hanya kontak yang aktif chat dalam rentang — label bisa menempel
+		// sejak lama, tapi close rate mengukur kontak aktif.
+		var active []string
+		database.DB.Model(&models.ChatHistory{}).
+			Where("agent_id = ? AND created_at >= ?", agentID, *since).
+			Distinct("sender").Pluck("sender", &active)
+		q = q.Where("sender IN ?", active)
+	}
+	var senders []string
+	q.Distinct("sender").Pluck("sender", &senders)
+	return senders
+}
+
+// ClosingSenderSet = kontak unik yang dianggap closing (gabungan): punya
+// ClosingRecord (transaksi terdeteksi) ATAU menyandang label WA closing.
+func ClosingSenderSet(agentID uint, since *time.Time) map[string]bool {
+	out := map[string]bool{}
+	var recSenders []string
+	rq := database.DB.Model(&models.ClosingRecord{}).Where("agent_id = ?", agentID)
+	if since != nil {
+		rq = rq.Where("created_at >= ?", *since)
+	}
+	rq.Pluck("sender", &recSenders)
+	for _, s := range recSenders {
+		if s != "" {
+			out[s] = true
+		}
+	}
+	for _, s := range labelClosingSenders(agentID, since) {
+		if s != "" {
+			out[s] = true
+		}
+	}
+	return out
+}
+
 // GetLearningConfig mengambil/membuat config learning untuk agent.
 func GetLearningConfig(agentID uint) models.LearningConfig {
 	var cfg models.LearningConfig
@@ -830,6 +911,7 @@ func GetLearningConfig(agentID uint) models.LearningConfig {
 			ScheduleEnabled:         false,
 			ScheduleCron:            "0 2 * * *",
 			LookbackDays:            30,
+			ClosingLabels:           DefaultClosingLabels,
 		}
 		database.DB.Create(&cfg)
 	}

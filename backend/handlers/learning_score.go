@@ -11,6 +11,7 @@ import (
 
 	"wa-assistant/backend/database"
 	"wa-assistant/backend/models"
+	"wa-assistant/backend/services"
 
 	"github.com/gin-gonic/gin"
 )
@@ -37,15 +38,24 @@ func GetLearningScore(c *gin.Context) {
 	aid := uint(agentID)
 	since := time.Now().AddDate(0, 0, -30)
 
-	var closing int64
-	database.DB.Model(&models.ClosingRecord{}).
-		Where("agent_id = ? AND created_at >= ?", aid, since).
-		Distinct("sender").Count(&closing)
-
-	var active int64
+	var activeSet = map[string]bool{}
+	var activeList []string
 	database.DB.Model(&models.ChatHistory{}).
 		Where("agent_id = ? AND created_at >= ?", aid, since).
-		Distinct("sender").Count(&active)
+		Distinct("sender").Pluck("sender", &activeList)
+	for _, s := range activeList {
+		activeSet[s] = true
+	}
+	// Closing = gabungan ClosingRecord (transaksi) + label WA closing (dipasang
+	// CS manusia) — dibatasi ke kontak aktif 30 hari.
+	closingSet := services.ClosingSenderSet(aid, &since)
+	closing := int64(0)
+	for s := range closingSet {
+		if activeSet[s] {
+			closing++
+		}
+	}
+	active := int64(len(activeSet))
 
 	var applied, pending int64
 	database.DB.Model(&models.LearningPattern{}).

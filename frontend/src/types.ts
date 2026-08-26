@@ -743,6 +743,7 @@ export interface LearningConfig {
   schedule_enabled: boolean;
   schedule_cron: string;
   lookback_days: number;
+  closing_labels: string;
   updated_at: string;
 }
 

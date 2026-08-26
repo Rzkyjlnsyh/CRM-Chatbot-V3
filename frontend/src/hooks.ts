@@ -1115,6 +1115,7 @@ export function useLearningStatus(agentId: number) {
     queryKey: ['learning-status', agentId],
     queryFn: async () => (await api.get(`/agents/${agentId}/learning/status`)).data.data,
     enabled: !!agentId,
+    refetchInterval: 5000,
   });
 }
 
