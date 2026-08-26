@@ -106,8 +106,18 @@ function PatternCard({ pattern, onApply, onReject, loading }: {
 
 export default function LearningPanel({ agentId }: { agentId: number }) {
   const [tab, setTab] = useState(0);
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
+  const isoDate = (d: Date) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
+  const [startDate, setStartDate] = useState(() => {
+    const s = new Date();
+    s.setDate(s.getDate() - 30);
+    return isoDate(s);
+  });
+  const [endDate, setEndDate] = useState(() => isoDate(new Date()));
   const [applyMinConf, setApplyMinConf] = useState(0.6);
   const [snapshotLabel, setSnapshotLabel] = useState('');
   const [snapshotOpen, setSnapshotOpen] = useState(false);
@@ -130,6 +140,10 @@ export default function LearningPanel({ agentId }: { agentId: number }) {
     || applyAll.isPending || createSnapshot.isPending || rollback.isPending;
 
   const handleRunLearning = () => {
+    if (startDate && endDate && startDate > endDate) {
+      swalToast('Rentang tanggal terbalik: "Dari" lebih baru daripada "Sampai".', 'error');
+      return;
+    }
     startLearning.mutate(
       { start_date: startDate || undefined, end_date: endDate || undefined },
       {
@@ -278,12 +292,14 @@ export default function LearningPanel({ agentId }: { agentId: number }) {
               <Grid size={{ xs: 6, sm: 3 }}>
                 <TextField label="Dari tanggal" type="date" size="small" fullWidth
                   value={startDate} onChange={(e) => setStartDate(e.target.value)}
-                  slotProps={{ inputLabel: { shrink: true } }} />
+                  slotProps={{ inputLabel: { shrink: true } }}
+                  helperText="Default: 30 hari lalu" />
               </Grid>
               <Grid size={{ xs: 6, sm: 3 }}>
                 <TextField label="Sampai tanggal" type="date" size="small" fullWidth
                   value={endDate} onChange={(e) => setEndDate(e.target.value)}
-                  slotProps={{ inputLabel: { shrink: true } }} />
+                  slotProps={{ inputLabel: { shrink: true } }}
+                  helperText="Termasuk sepanjang hari ini" />
               </Grid>
               <Grid size={{ xs: 12, sm: 6 }} sx={{ display: 'flex', alignItems: 'flex-end' }}>
                 <Button variant="contained" size="large" startIcon={startLearning.isPending ? <CircularProgress size={18} /> : <PlayArrowIcon />}

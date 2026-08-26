@@ -75,7 +75,17 @@ func processLearningRun(runID, agentID uint, startDate, endDate *time.Time) {
 		return
 	}
 	if len(humanChats) == 0 {
-		failLearningRun(&run, "tidak ditemukan chat CS manusia dalam rentang tersebut. Pastikan CS manusia sudah membalas pelanggan via WhatsApp terhubung")
+		// Pesan lebih pintar: beri tahu berapa chat CS tersedia di 90 hari
+		// terakhir supaya user tahu kenapa gagal & cara memperbaikinya.
+		var last90 int64
+		database.DB.Model(&models.ChatHistory{}).
+			Where("agent_id = ? AND reply <> '' AND from_human = ? AND created_at >= ?",
+				agentID, true, time.Now().AddDate(0, 0, -90)).Count(&last90)
+		msg := "tidak ditemukan chat CS manusia dalam rentang tersebut. Pastikan CS manusia sudah membalas pelanggan via WhatsApp terhubung"
+		if last90 > 0 {
+			msg = fmt.Sprintf("tidak ditemukan chat CS manusia dalam rentang yang dipilih, padahal ada %d chat CS dalam 90 hari terakhir. Perluas rentang tanggal (Dari lebih awal) lalu jalankan lagi.", last90)
+		}
+		failLearningRun(&run, msg)
 		return
 	}
 	var totalChats int64

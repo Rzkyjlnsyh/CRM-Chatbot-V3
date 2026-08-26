@@ -2,8 +2,10 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"strconv"
+	"strings"
 	"time"
 
 	"wa-assistant/backend/database"
@@ -21,27 +23,56 @@ func StartLearning(c *gin.Context) {
 	agentID := currentAgentID(c)
 
 	var req struct {
-		StartDate string `json:"start_date"` // optional, format "2006-01-02"
+		StartDate string `json:"start_date"` // optional, "2006-01-02" ATAU RFC3339
 		EndDate   string `json:"end_date"`   // optional
 	}
 	c.ShouldBindJSON(&req)
 
-	var startDate, endDate *time.Time
-	if req.StartDate != "" {
-		t, err := time.Parse("2006-01-02", req.StartDate)
-		if err != nil {
-			c.JSON(400, gin.H{"error": "Format start_date salah. Gunakan YYYY-MM-DD"})
-			return
+	// parseLearningDate menerima "YYYY-MM-DD" (tanggal saja) atau RFC3339.
+	// Tanggal saja: awal = 00:00, akhir = 23:59:59.999 (SEHARI PENUH).
+	parseLearningDate := func(raw string, endOfDay bool) (*time.Time, error) {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			return nil, nil
 		}
-		startDate = &t
+		if t, err := time.Parse("2006-01-02", raw); err == nil {
+			if endOfDay {
+				t = t.Add(24*time.Hour - time.Nanosecond)
+			}
+			return &t, nil
+		}
+		if t, err := time.Parse(time.RFC3339, raw); err == nil {
+			return &t, nil
+		}
+		return nil, fmt.Errorf("format tanggal tidak dikenal: %q — gunakan YYYY-MM-DD", raw)
 	}
-	if req.EndDate != "" {
-		t, err := time.Parse("2006-01-02", req.EndDate)
-		if err != nil {
-			c.JSON(400, gin.H{"error": "Format end_date salah. Gunakan YYYY-MM-DD"})
-			return
-		}
-		endDate = &t
+
+	startDate, err := parseLearningDate(req.StartDate, false)
+	if err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	endDate, err := parseLearningDate(req.EndDate, true)
+	if err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Default ramah: kosongkan keduanya = 30 hari terakhir.
+	now := time.Now()
+	if startDate == nil && endDate == nil {
+		s := now.AddDate(0, 0, -30)
+		startDate, endDate = &s, &now
+	} else if startDate == nil {
+		s := endDate.AddDate(0, 0, -30)
+		startDate = &s
+	} else if endDate == nil {
+		endDate = &now
+	}
+
+	if startDate.After(*endDate) {
+		c.JSON(400, gin.H{"error": "Rentang tanggal terbalik: mulai lebih baru daripada selesai. Periksa kolom Dari/Sampai tanggal."})
+		return
 	}
 
 	result, err := services.EnqueueLearningRun(agentID, startDate, endDate)
@@ -50,9 +81,11 @@ func StartLearning(c *gin.Context) {
 		return
 	}
 	c.JSON(202, gin.H{"data": gin.H{
-		"run_id":  result.ID,
-		"status":  "pending",
-		"message": "Learning dimulai di background. Cek status secara berkala.",
+		"run_id":     result.ID,
+		"status":     "pending",
+		"message":    "Learning dimulai di background. Cek status secara berkala.",
+		"start_date": startDate,
+		"end_date":   endDate,
 	}})
 }
 
