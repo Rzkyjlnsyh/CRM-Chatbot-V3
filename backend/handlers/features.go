@@ -202,7 +202,8 @@ func InboxContacts(c *gin.Context) {
 	var rows []contactRow
 	// MAX(id) = pesan terbaru per sender (id mono naik). Hindari join created_at yang bisa
 	// dobel baris saat timestamp sama.
-	database.DB.Raw(`
+	labelFilter := strings.TrimSpace(c.Query("label_id"))
+	sql := `
 		SELECT ch.sender, ch.created_at AS last_at,
 			CASE
 				WHEN TRIM(COALESCE(ch.message, '')) != '' THEN ch.message
@@ -217,9 +218,17 @@ func InboxContacts(c *gin.Context) {
 			WHERE agent_id = ?
 			GROUP BY sender
 		) latest ON ch.id = latest.max_id
-		WHERE ch.agent_id = ?
+		WHERE ch.agent_id = ?`
+	args := []any{id, id}
+	if labelFilter != "" {
+		// Filter label: hanya sender yang menyandang label WhatsApp tsb.
+		sql += ` AND ch.sender IN (SELECT sender FROM chat_labels WHERE agent_id = ? AND label_id = ?)`
+		args = append(args, id, labelFilter)
+	}
+	sql += `
 		ORDER BY ch.id DESC
-		LIMIT 500`, id, id).Scan(&rows)
+		LIMIT 500`
+	database.DB.Raw(sql, args...).Scan(&rows)
 
 	senders := make([]string, 0, len(rows))
 	for _, r := range rows {
@@ -252,6 +261,48 @@ func InboxContacts(c *gin.Context) {
 		}
 	}
 
+	// Label WhatsApp asli per percakapan (dipasang CS / tersinkron dari perangkat).
+	labels := map[string][]gin.H{}
+	if len(senders) > 0 {
+		var lr []struct {
+			Sender  string `gorm:"column:sender"`
+			LabelID string `gorm:"column:label_id"`
+			Name    string `gorm:"column:name"`
+			Color   string `gorm:"column:color"`
+		}
+		database.DB.Table("chat_labels cl").
+			Select("cl.sender, l.label_id, l.name, l.color").
+			Joins("JOIN labels l ON l.label_id = cl.label_id AND l.agent_id = cl.agent_id").
+			Where("cl.agent_id = ? AND cl.sender IN ?", id, senders).
+			Scan(&lr)
+		for _, r := range lr {
+			labels[r.Sender] = append(labels[r.Sender], gin.H{
+				"label_id": r.LabelID, "name": r.Name, "color": r.Color,
+			})
+		}
+	}
+
+	// Unread = pesan masuk (from_human=false) dengan id > last_read_chat_id.
+	// Satu query gabungan (bukan N+1) — SUM(CASE…) lintas dialek SQLite/MySQL.
+	unread := map[string]int{}
+	if len(senders) > 0 {
+		var uc []struct {
+			Sender string `gorm:"column:sender"`
+			Cnt    int64  `gorm:"column:cnt"`
+		}
+		database.DB.Raw(`
+			SELECT ch.sender,
+				SUM(CASE WHEN ch.id > COALESCE(cr.last_read_chat_id, 0) THEN 1 ELSE 0 END) AS cnt
+			FROM chat_histories ch
+			LEFT JOIN conversation_reads cr
+				ON cr.agent_id = ch.agent_id AND cr.sender = ch.sender
+			WHERE ch.agent_id = ? AND ch.from_human = 0 AND ch.sender IN ?
+			GROUP BY ch.sender`, id, senders).Scan(&uc)
+		for _, u := range uc {
+			unread[u.Sender] = int(u.Cnt)
+		}
+	}
+
 	out := make([]gin.H, 0, len(rows))
 	for _, r := range rows {
 		msg := strings.TrimSpace(r.LastMsg)
@@ -260,13 +311,50 @@ func InboxContacts(c *gin.Context) {
 		if len([]rune(msg)) > 64 {
 			msg = string([]rune(msg)[:64]) + "…"
 		}
+		rowLabels := labels[r.Sender]
+		if rowLabels == nil {
+			rowLabels = []gin.H{}
+		}
 		out = append(out, gin.H{
 			"sender": r.Sender, "last_at": r.LastAt, "last_msg": msg,
 			"needs_human": needsHuman[r.Sender], "manual_pause_until": pauses[r.Sender],
-			"name": names[r.Sender],
+			"name": names[r.Sender], "labels": rowLabels, "unread_count": unread[r.Sender],
 		})
 	}
 	c.JSON(200, gin.H{"data": out})
+}
+
+// MarkConversationRead — POST /agents/:id/inbox/:sender/read
+// Menandai percakapan terbaca sampai pesan terakhir saat ini.
+func MarkConversationRead(c *gin.Context) {
+	id, ok := resolveAgent(c)
+	if !ok {
+		return
+	}
+	sender := strings.TrimSpace(c.Param("sender"))
+	if sender == "" {
+		c.JSON(400, gin.H{"error": "sender wajib"})
+		return
+	}
+	var last models.ChatHistory
+	if err := database.DB.Select("id").
+		Where("agent_id = ? AND sender = ?", id, sender).
+		Order("id desc").First(&last).Error; err != nil {
+		// Tidak ada chat — tetap tandai agar UI konsisten.
+		c.JSON(200, gin.H{"data": gin.H{"sender": sender, "last_read_chat_id": 0}})
+		return
+	}
+	var rec models.ConversationRead
+	if database.DB.Where("agent_id = ? AND sender = ?", id, sender).First(&rec).Error == nil {
+		database.DB.Model(&rec).Updates(map[string]any{
+			"last_read_chat_id": last.ID, "updated_at": time.Now(),
+		})
+	} else {
+		database.DB.Create(&models.ConversationRead{
+			AgentID: id, Sender: sender, LastReadChatID: last.ID, UpdatedAt: time.Now(),
+		})
+	}
+	c.JSON(200, gin.H{"data": gin.H{"sender": sender, "last_read_chat_id": last.ID}})
 }
 
 // DeleteInboxConversation menghapus riwayat chat satu kontak dari inbox agent.

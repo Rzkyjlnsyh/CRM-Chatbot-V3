@@ -29,7 +29,7 @@ import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import {
   useContacts, useConversation, useConversationBrief, useRefreshConversationBrief,
   useSendMessage, useSendMedia, postAgentTyping, useRevokeMessage, useResumeBot, useReanalyzeImage,
-  useDeleteInboxConversation, useLoadOlderMessages,
+  useDeleteInboxConversation, useLoadOlderMessages, useMarkConversationRead, useLabels,
 } from '../hooks';
 import TemplatePicker from './TemplatePicker';
 import { swalConfirm, swalToast } from '../services/swal';
@@ -415,6 +415,15 @@ function ConversationBriefBar({
   );
 }
 
+function labelHex(c: string): string {
+  // WA memberi warna label sebagai indeks (0-20) — petakan ke hex bila angka.
+  if (!c) return '#25D366';
+  const WA_LABEL_COLORS = ['#25D366', '#3b5998', '#5bc236', '#009688', '#00a884', '#008069', '#e0e0e0', '#ffd279', '#fa3e4c', '#e54245', '#a633b7', '#5856d6', '#0e90ed', '#0b7cbf', '#075e54', '#dcf8c6'];
+  const n = Number(c);
+  if (Number.isInteger(n) && n >= 0 && n < WA_LABEL_COLORS.length) return WA_LABEL_COLORS[n];
+  return c.startsWith('#') ? c : '#25D366';
+}
+
 /* ─── Contact row (memo) ────────────────────────────────────────────────── */
 
 const ContactRow = memo(function ContactRow({
@@ -476,13 +485,38 @@ const ContactRow = memo(function ContactRow({
         </Avatar>
         <Box sx={{ minWidth: 0, flex: 1, border: 0 }}>
           <Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'baseline', gap: 1, mb: 0.2 }}>
-            <Typography noWrap sx={{ fontWeight: 500, fontSize: 16, color: '#111b21', lineHeight: 1.25 }}>
+            <Typography noWrap sx={{ fontWeight: (ct.unread_count ?? 0) > 0 ? 800 : 500, fontSize: 16, color: '#111b21', lineHeight: 1.25 }}>
               {label}
             </Typography>
-            <Typography sx={{ fontSize: 12, color: ct.needs_human ? WA.green : WA.meta, flexShrink: 0 }}>
-              {fmtListTime(ct.last_at)}
-            </Typography>
+            <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center', flexShrink: 0 }}>
+              {(ct.unread_count ?? 0) > 0 && (
+                <Box
+                  sx={{
+                    minWidth: 20, height: 20, px: 0.6, borderRadius: 10,
+                    bgcolor: WA.green, color: '#fff', fontSize: 11, fontWeight: 700,
+                    display: 'grid', placeItems: 'center',
+                  }}
+                >
+                  {ct.unread_count! > 99 ? '99+' : ct.unread_count}
+                </Box>
+              )}
+              <Typography sx={{ fontSize: 12, color: ct.needs_human ? WA.green : WA.meta }}>
+                {fmtListTime(ct.last_at)}
+              </Typography>
+            </Stack>
           </Stack>
+          {ct.labels && ct.labels.length > 0 && (
+            <Stack direction="row" spacing={0.4} sx={{ mb: 0.2, flexWrap: 'wrap', rowGap: 0.3 }}>
+              {ct.labels.map((l) => (
+                <Chip
+                  key={l.label_id}
+                  size="small"
+                  label={l.name}
+                  sx={{ height: 16, fontSize: 9.5, fontWeight: 700, bgcolor: alpha(labelHex(l.color), 0.16), color: labelHex(l.color) }}
+                />
+              ))}
+            </Stack>
+          )}
           <Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'center', gap: 0.75 }}>
             <Typography
               noWrap
@@ -1003,10 +1037,18 @@ export default function InboxPanel({
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
 
-  const { data: contacts, isLoading, isFetching } = useContacts(agentId);
+  const [labelFilter, setLabelFilter] = useState('');
+  const { data: contacts, isLoading, isFetching } = useContacts(agentId, labelFilter || undefined);
+  const markRead = useMarkConversationRead(agentId);
+  const waLabelsSync = useLabels(agentId);
   const [sender, setSender] = useState('');
   const [mobileShowChat, setMobileShowChat] = useState(false);
   const [search, setSearch] = useState('');
+
+  useEffect(() => {
+    if (agentId) waLabelsSync.mutate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentId]);
 
   const { data: convo, isFetching: convoFetching } = useConversation(agentId, sender);
   const loadOlderMsgs = useLoadOlderMessages(agentId, sender);
@@ -1124,7 +1166,9 @@ export default function InboxPanel({
     setSender(s);
     setMobileShowChat(true);
     setReplyTo(null);
-  }, []);
+    // Tandai terbaca — badge "belum dibaca" hilang otomatis.
+    markRead.mutate(s);
+  }, [markRead]);
 
   const deleteConversation = useCallback(async (target: string) => {
     const label = contacts?.find((c) => c.sender === target)?.name || `+${target}`;
@@ -1289,6 +1333,28 @@ export default function InboxPanel({
                 },
               }}
             />
+            {waLabelsSync.data && waLabelsSync.data.length > 0 && (
+              <Stack direction="row" spacing={0.5} sx={{ mt: 0.75, overflowX: 'auto', pb: 0.25 }}>
+                <Chip
+                  size="small"
+                  label="Semua"
+                  variant={labelFilter === '' ? 'filled' : 'outlined'}
+                  color={labelFilter === '' ? 'primary' : 'default'}
+                  onClick={() => setLabelFilter('')}
+                />
+                {waLabelsSync.data.map((l) => (
+                  <Chip
+                    key={l.label_id}
+                    size="small"
+                    label={l.name}
+                    variant={labelFilter === l.label_id ? 'filled' : 'outlined'}
+                    color={labelFilter === l.label_id ? 'primary' : 'default'}
+                    onClick={() => setLabelFilter(labelFilter === l.label_id ? '' : l.label_id)}
+                    title={`Filter percakapan berlabel "${l.name}"`}
+                  />
+                ))}
+              </Stack>
+            )}
           </Box>
 
           <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', overscrollBehavior: 'contain' }}>

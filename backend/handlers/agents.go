@@ -321,7 +321,10 @@ func processMessageLocked(agentID uint, sender types.JID, in services.IncomingMe
 			log.Printf("Gagal mencatat ChatHistory (agent %d, %s): %v", agentID, num, err)
 		} else if agent.AIEnabled && strings.TrimSpace(message) != "" {
 			chatID := row.ID
-			services.Go("crm-ai-stage", func() { maybeAssessCRMLeadStage(agentID, num, chatID) })
+			services.Go("crm-ai-stage", func() {
+				services.ApplyLabelRules(agentID, num, message)
+				maybeAssessCRMLeadStage(agentID, num, chatID)
+			})
 		}
 	}
 	readMarked := false

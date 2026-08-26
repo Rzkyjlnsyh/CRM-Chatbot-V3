@@ -22,30 +22,28 @@ const (
 	leadStageUnqualified = "unqualified"
 )
 
-func normalizeLeadStage(raw string) (string, bool) {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "", leadStageNew:
+// normalizeLeadStage memvalidasi key tahap terhadap definisi pipeline agent
+// (bukan hardcode) — tahap custom user ikut valid.
+func normalizeLeadStage(agentID uint, raw string) (string, bool) {
+	clean := strings.ToLower(strings.TrimSpace(raw))
+	if clean == "" {
 		return leadStageNew, true
-	case leadStageCold:
-		return leadStageCold, true
-	case leadStageWarm:
-		return leadStageWarm, true
-	case leadStageHot:
-		return leadStageHot, true
-	case leadStageCustomer:
-		return leadStageCustomer, true
-	case leadStageUnqualified:
-		return leadStageUnqualified, true
-	default:
-		return "", false
 	}
+	defs := database.GetStageDefMap(agentID)
+	if _, ok := defs[clean]; ok {
+		return clean, true
+	}
+	return "", false
 }
 
-func emptyStageCounts() map[string]int {
-	return map[string]int{
-		leadStageNew: 0, leadStageCold: 0, leadStageWarm: 0,
-		leadStageHot: 0, leadStageCustomer: 0, leadStageUnqualified: 0,
+// emptyStageCounts membangun peta hitungan tahap dari definisi pipeline agent.
+func emptyStageCounts(agentID uint) map[string]int {
+	defs := database.GetStageDefMap(agentID)
+	out := make(map[string]int, len(defs))
+	for key := range defs {
+		out[key] = 0
 	}
+	return out
 }
 
 // normalizeTags merapikan daftar tag: trim, buang kosong & duplikat, gabung dengan koma.
@@ -91,7 +89,7 @@ func ListSavedContacts(c *gin.Context) {
 	stageFilter := ""
 	if rawStage := strings.TrimSpace(c.Query("stage")); rawStage != "" {
 		var valid bool
-		stageFilter, valid = normalizeLeadStage(rawStage)
+		stageFilter, valid = normalizeLeadStage(id, rawStage)
 		if !valid {
 			c.JSON(400, gin.H{"error": "Status CRM tidak valid"})
 			return
@@ -122,7 +120,7 @@ func ListSavedContacts(c *gin.Context) {
 	}
 
 	tagSet := map[string]string{} // lower -> bentuk tampil
-	stageCounts := emptyStageCounts()
+	stageCounts := emptyStageCounts(id)
 	filtered := make([]models.Contact, 0, len(contacts))
 	for _, ct := range contacts {
 		tags := tagList(ct.Tags)
@@ -144,7 +142,7 @@ func ListSavedContacts(c *gin.Context) {
 				continue
 			}
 		}
-		contactStage, _ := normalizeLeadStage(ct.LeadStage)
+		contactStage, _ := normalizeLeadStage(id, ct.LeadStage)
 		stageCounts[contactStage]++
 		if stageFilter != "" && contactStage != stageFilter {
 			continue
@@ -174,7 +172,7 @@ func ListSavedContacts(c *gin.Context) {
 		}
 		data = append(data, gin.H{
 			"id": ct.ID, "number": ct.Number, "name": ct.Name,
-			"notes": ct.Notes, "tags": ct.Tags, "lead_stage": normalizedContactStage(ct.LeadStage), "last_at": la,
+			"notes": ct.Notes, "tags": ct.Tags, "lead_stage": normalizedContactStage(id, ct.LeadStage), "last_at": la,
 			"lead_stage_source": ct.LeadStageSource, "lead_stage_reason": ct.LeadStageReason,
 			"lead_stage_confidence": ct.LeadStageConfidence, "lead_stage_locked": ct.LeadStageLocked,
 			"lead_stage_updated_at": ct.LeadStageUpdatedAt,
@@ -190,8 +188,8 @@ func ListSavedContacts(c *gin.Context) {
 	c.JSON(200, gin.H{"data": data, "total": total, "page": page, "limit": limit, "all_tags": allTags, "stage_counts": stageCounts})
 }
 
-func normalizedContactStage(raw string) string {
-	stage, ok := normalizeLeadStage(raw)
+func normalizedContactStage(agentID uint, raw string) string {
+	stage, ok := normalizeLeadStage(agentID, raw)
 	if !ok {
 		return leadStageNew
 	}
@@ -224,7 +222,7 @@ func CreateSavedContact(c *gin.Context) {
 		c.JSON(409, gin.H{"error": "Nomor ini sudah ada di kontak"})
 		return
 	}
-	stage, validStage := normalizeLeadStage(req.LeadStage)
+	stage, validStage := normalizeLeadStage(id, req.LeadStage)
 	if !validStage {
 		c.JSON(400, gin.H{"error": "Status CRM tidak valid"})
 		return
@@ -272,7 +270,7 @@ func UpdateSavedContact(c *gin.Context) {
 		ct.Tags = normalizeTags(*req.Tags)
 	}
 	if req.LeadStage != nil {
-		stage, valid := normalizeLeadStage(*req.LeadStage)
+		stage, valid := normalizeLeadStage(id, *req.LeadStage)
 		if !valid {
 			c.JSON(400, gin.H{"error": "Status CRM tidak valid"})
 			return
@@ -387,7 +385,7 @@ func BulkStageSavedContacts(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "Pilih minimal satu kontak"})
 		return
 	}
-	stage, valid := normalizeLeadStage(req.LeadStage)
+	stage, valid := normalizeLeadStage(id, req.LeadStage)
 	if !valid {
 		c.JSON(400, gin.H{"error": "Status CRM tidak valid"})
 		return
@@ -514,7 +512,7 @@ func BulkDeleteSavedContacts(c *gin.Context) {
 	stage := ""
 	if strings.TrimSpace(req.Stage) != "" {
 		var valid bool
-		stage, valid = normalizeLeadStage(req.Stage)
+		stage, valid = normalizeLeadStage(id, req.Stage)
 		if !valid {
 			c.JSON(400, gin.H{"error": "Status CRM tidak valid"})
 			return
@@ -551,7 +549,7 @@ func BulkDeleteSavedContacts(c *gin.Context) {
 				continue
 			}
 		}
-		if stage != "" && normalizedContactStage(ct.LeadStage) != stage {
+		if stage != "" && normalizedContactStage(id, ct.LeadStage) != stage {
 			continue
 		}
 		ids = append(ids, ct.ID)

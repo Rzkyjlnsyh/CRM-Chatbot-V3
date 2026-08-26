@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from './services/api';
-import type { Analytics, AIMetrics, Contact, ChatMsg, ConversationBrief, Broadcast, BroadcastDetailData, BroadcastSafetyForm, BroadcastConsentSummary, WAGroup, GroupGuardConfig, GroupModerationLog, LabelInfo, ScheduledMessage, AutoReply, Template, SavedContact, SavedContactsResp, LeadStage, FollowUp, Agent, KnowledgeItem, Handoff, CrawlJob, CrawlPage, KnowledgeUsage, ScheduledStatus, ApiSettings, Flow, Product, ProductOrder, AIForm, AIFormSubmission, MediaAsset, LearningStatus, LearningScore, LearningRun, LearningRunDetail, LearningPattern, LearningSnapshot, LearningConfig, MetaConfigData } from './types';
+import type { Analytics, AIMetrics, Contact, ChatMsg, ConversationBrief, Broadcast, BroadcastDetailData, BroadcastSafetyForm, BroadcastConsentSummary, WAGroup, GroupGuardConfig, GroupModerationLog, LabelInfo, ScheduledMessage, AutoReply, Template, SavedContact, SavedContactsResp, LeadStage, FollowUp, Agent, KnowledgeItem, Handoff, CrawlJob, CrawlPage, KnowledgeUsage, ScheduledStatus, ApiSettings, Flow, Product, ProductOrder, AIForm, AIFormSubmission, MediaAsset, LearningStatus, LearningScore, LearningRun, LearningRunDetail, LearningPattern, LearningSnapshot, LearningConfig, MetaConfigData, LeadStageDef, LabelRule, PipelineData } from './types';
 
 type ContactList = { number: string; name: string }[];
 
@@ -27,16 +27,25 @@ export function useAgentAIMetrics(agentId: number) {
   });
 }
 
-export function useContacts(agentId: number) {
+export function useContacts(agentId: number, labelId?: string) {
   return useQuery<Contact[]>({
-    queryKey: ['contacts', agentId],
-    queryFn: async () => (await api.get(`/agents/${agentId}/contacts`)).data.data,
+    queryKey: ['contacts', agentId, labelId || ''],
+    queryFn: async () => (await api.get(`/agents/${agentId}/contacts`, { params: labelId ? { label_id: labelId } : {} })).data.data,
     enabled: !!agentId,
     // Poll lebih longgar: list kontak tidak perlu real-time ketat.
     refetchInterval: 12_000,
     refetchIntervalInBackground: false,
     staleTime: 5_000,
     placeholderData: (prev) => prev,
+  });
+}
+
+export function useMarkConversationRead(agentId: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (sender: string) =>
+      (await api.post(`/agents/${agentId}/inbox/${encodeURIComponent(sender)}/read`)).data,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['contacts', agentId] }),
   });
 }
 
@@ -1279,5 +1288,71 @@ export function useTestMetaEvent(agentId: number) {
   return useMutation({
     mutationFn: async () => (await api.post(`/agents/${agentId}/meta/test`)).data,
     onSuccess: () => qc.invalidateQueries({ queryKey: ['meta-config', agentId] }),
+  });
+}
+
+// ---- Pipeline & Label hooks (single-tenant) ----
+
+export function useCrmPipeline(agentId: number) {
+  return useQuery<PipelineData>({
+    queryKey: ['crm-pipeline', agentId],
+    queryFn: async () => (await api.get(`/agents/${agentId}/crm/pipeline`)).data,
+    enabled: !!agentId,
+  });
+}
+
+export function useSavePipelineStages(agentId: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (stages: LeadStageDef[]) =>
+      (await api.put(`/agents/${agentId}/crm/pipeline/stages`, { stages })).data,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['crm-pipeline', agentId] });
+      qc.invalidateQueries({ queryKey: ['crm-contacts', agentId] });
+    },
+  });
+}
+
+export function useSavePipelineConfig(agentId: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (cfg: { smart_labels_enabled: boolean; closing_definition: string }) =>
+      (await api.put(`/agents/${agentId}/crm/pipeline/config`, cfg)).data,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['crm-pipeline', agentId] }),
+  });
+}
+
+export function useSaveLabelRule(agentId: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (rule: Partial<LabelRule>) => {
+      const body = {
+        id: rule.id, name: rule.name, enabled: rule.enabled, priority: rule.priority,
+        trigger_keywords: typeof rule.trigger_keywords === 'string'
+          ? JSON.parse(rule.trigger_keywords || '[]')
+          : [],
+        trigger_stage: rule.trigger_stage, action_stage: rule.action_stage,
+        action_wa_label: rule.action_wa_label,
+      };
+      return (await (rule.id ? api.put(`/agents/${agentId}/crm/pipeline/rules`, body)
+        : api.post(`/agents/${agentId}/crm/pipeline/rules`, body))).data;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['crm-pipeline', agentId] }),
+  });
+}
+
+export function useDeleteLabelRule(agentId: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (rid: number) => (await api.delete(`/agents/${agentId}/crm/pipeline/rules/${rid}`)).data,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['crm-pipeline', agentId] }),
+  });
+}
+
+export function useTestLabelRules(agentId: number) {
+  return useMutation({
+    mutationFn: async (text: string) =>
+      (await api.post(`/agents/${agentId}/crm/pipeline/rules/test`, { text })).data as
+      { matched: { id: number; name: string; action_stage: string; action_wa_label: string }[]; count: number },
   });
 }

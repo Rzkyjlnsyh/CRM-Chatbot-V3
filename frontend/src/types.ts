@@ -97,6 +97,8 @@ export interface Contact {
   needs_human: boolean;
   manual_pause_until?: string | null;
   name?: string;
+  labels?: { label_id: string; name: string; color: string }[];
+  unread_count?: number;
 }
 
 /** Ringkasan operasional percakapan untuk CS di inbox (bukan dikirim ke pelanggan). */
@@ -809,4 +811,37 @@ export interface MetaConfigData {
   event_name: string;
   label_events: Record<string, string>;
   stats?: MetaStats;
+}
+
+// --- Pipeline & Label (single-tenant) ---
+
+export interface LeadStageDef {
+  id: number;
+  agent_id: number;
+  key: string;
+  name: string;
+  color: string;
+  rank: number;
+  description: string;
+  is_closing: boolean;
+  min_confidence: number;
+  is_default: boolean;
+}
+
+export interface LabelRule {
+  id: number;
+  agent_id: number;
+  name: string;
+  enabled: boolean;
+  priority: number;
+  trigger_keywords: string; // JSON array string (lowercase)
+  trigger_stage: string; // '' = semua tahap
+  action_stage: string; // '' = tak ubah tahap
+  action_wa_label: string; // '' = tak beri label WA
+}
+
+export interface PipelineData {
+  stages: LeadStageDef[];
+  config: { smart_labels_enabled: boolean; closing_definition: string };
+  rules: LabelRule[];
 }

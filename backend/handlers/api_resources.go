@@ -123,7 +123,7 @@ func APISaveContact(c *gin.Context) {
 	}
 	assign := map[string]any{"name": strings.TrimSpace(req.Name), "notes": req.Notes, "tags": strings.TrimSpace(req.Tags)}
 	if req.LeadStage != nil {
-		stage, valid := normalizeLeadStage(*req.LeadStage)
+		stage, valid := normalizeLeadStage(agent.ID, *req.LeadStage)
 		if !valid {
 			c.JSON(400, gin.H{"error": "lead_stage harus salah satu: new, cold, warm, hot, customer, unqualified."})
 			return
@@ -186,7 +186,7 @@ func APIUpdateContact(c *gin.Context) {
 		updates["tags"] = strings.TrimSpace(*req.Tags)
 	}
 	if req.LeadStage != nil {
-		stage, valid := normalizeLeadStage(*req.LeadStage)
+		stage, valid := normalizeLeadStage(agent.ID, *req.LeadStage)
 		if !valid {
 			c.JSON(400, gin.H{"error": "lead_stage harus salah satu: new, cold, warm, hot, customer, unqualified."})
 			return

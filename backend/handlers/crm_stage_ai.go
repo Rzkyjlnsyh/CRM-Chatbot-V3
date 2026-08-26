@@ -9,12 +9,22 @@ import (
 	"wa-assistant/backend/services"
 )
 
+// maybeAssessCRMLeadStage menilai tahap minat dengan AI memakai definisi tahap
+// milik user. Fail-closed: error apa pun → tahap lama dipertahankan.
 func maybeAssessCRMLeadStage(agentID uint, sender string, latestChatID uint) {
+	database.EnsureDefaultStages(agentID)
+	cfg := database.GetLeadLabelConfig(agentID)
+	if !cfg.SmartLabelsEnabled {
+		return
+	}
+	defs := database.GetStageDefMap(agentID)
+
 	var contact models.Contact
 	if database.DB.Where("agent_id = ? AND number = ?", agentID, sender).First(&contact).Error != nil {
 		return
 	}
-	if contact.LeadStageLocked || contact.LeadStage == leadStageCustomer || latestChatID <= contact.LeadStageAnalyzedChatID {
+	// Kontak terkunci manual, sudah closing (sticky), atau chat sudah dianalisa → lewati.
+	if contact.LeadStageLocked || stageIsClosing(defs, contact.LeadStage) || latestChatID <= contact.LeadStageAnalyzedChatID {
 		return
 	}
 	var history []models.ChatHistory
@@ -25,14 +35,27 @@ func maybeAssessCRMLeadStage(agentID uint, sender string, latestChatID uint) {
 	}
 	var memory models.ConversationMemory
 	database.DB.Where("agent_id = ? AND sender = ?", agentID, sender).First(&memory)
-	assessment, err := services.ClassifyCRMLead(history, memory.Summary)
+
+	hints := make([]services.CRMStageHint, 0, len(defs))
+	for _, key := range database.SortedStageKeys(defs) {
+		d := defs[key]
+		hints = append(hints, services.CRMStageHint{Key: d.Key, Name: d.Name, Description: d.Description, IsClosing: d.IsClosing})
+	}
+	services.SortStageHints(hints, func(key string) int {
+		if d, ok := defs[key]; ok {
+			return d.Rank
+		}
+		return 999
+	})
+
+	assessment, err := services.ClassifyCRMLead(history, memory.Summary, hints, cfg.ClosingDefinition)
 	if err != nil {
 		log.Printf("CRM AI gagal menilai agent %d kontak %s: %v", agentID, sender, err)
 		return
 	}
 	now := time.Now()
 	updates := map[string]any{"lead_stage_analyzed_chat_id": latestChatID}
-	if canApplyAILeadStage(contact, assessment) {
+	if canApplyAILeadStage(contact, assessment, defs) {
 		updates["lead_stage"] = assessment.Stage
 		updates["lead_stage_source"] = "ai"
 		updates["lead_stage_reason"] = assessment.Reason
@@ -41,47 +64,58 @@ func maybeAssessCRMLeadStage(agentID uint, sender string, latestChatID uint) {
 	}
 	// Kondisi ini mencegah hasil AI yang datang terlambat menimpa edit manual.
 	database.DB.Model(&models.Contact{}).
-		Where("id = ? AND agent_id = ? AND lead_stage_locked = ? AND lead_stage != ? AND lead_stage_analyzed_chat_id < ?", contact.ID, agentID, false, leadStageCustomer, latestChatID).
+		Where("id = ? AND agent_id = ? AND lead_stage_locked = ? AND lead_stage_analyzed_chat_id < ?", contact.ID, agentID, false, latestChatID).
 		Updates(updates)
 }
 
-func canApplyAILeadStage(contact models.Contact, assessment services.CRMLeadAssessment) bool {
-	if contact.LeadStageLocked || contact.LeadStage == leadStageCustomer || assessment.Stage == leadStageCustomer || assessment.Stage == leadStageNew {
+// stageIsClosing mengecek apakah key tahap bertanda closing di definisi user.
+func stageIsClosing(defs map[string]models.LeadStageDef, key string) bool {
+	d, ok := defs[key]
+	return ok && d.IsClosing
+}
+
+// canApplyAILeadStage = guardrail penerapan hasil AI:
+//  1. AI tidak pernah menetapkan tahap closing (hanya transaksi terkonfirmasi/manual).
+//  2. Ambang keyakinan per-tahap dari definisi user (bukan hardcode tunggal).
+//  3. Monotonic: AI boleh menaikkan minat, penurunan dilakukan manual/aturan.
+//  4. Sinyal aktivitas eksplisit (form/checkout) tidak boleh diturunkan AI.
+func canApplyAILeadStage(contact models.Contact, assessment services.CRMLeadAssessment, defs map[string]models.LeadStageDef) bool {
+	if contact.LeadStageLocked {
 		return false
 	}
+	// AI dilarang menghasilkan closing/customer.
+	if stageIsClosing(defs, assessment.Stage) {
+		return false
+	}
+	if stageIsClosing(defs, contact.LeadStage) {
+		return false
+	}
+	if assessment.Stage == contact.LeadStage {
+		// Nilai sama: boleh simpan alasan selama sumber bukan aktivitas (tak menimpa).
+		return contact.LeadStageSource != "activity"
+	}
+	// Ambang keyakinan per-tahap dari definisi user.
 	threshold := 0.72
-	if assessment.Stage == leadStageHot {
-		threshold = 0.82
-	} else if assessment.Stage == leadStageUnqualified {
-		threshold = 0.9
+	if d, ok := defs[assessment.Stage]; ok && d.MinConfidence > 0 {
+		threshold = d.MinConfidence
 	}
 	if assessment.Confidence < threshold {
 		return false
 	}
-	// Sinyal aktivitas eksplisit (form/checkout) tidak boleh diturunkan AI.
-	if contact.LeadStageSource == "activity" && crmStageRank(assessment.Stage) < crmStageRank(contact.LeadStage) {
+	// Monotonic: AI hanya boleh menaikkan minat. Pengecualian tunggal: penurunan
+	// ke tahap TERENDAH (rank 0 = bucket negatif spam/tidak relevan) diizinkan
+	// dengan ambang keyakinan tahap itu (default 0.9) agar deteksi spam tetap ada.
+	targetRank := crmStageRankWithDefs(assessment.Stage, defs)
+	currentRank := crmStageRankWithDefs(contact.LeadStage, defs)
+	if targetRank < currentRank && targetRank != 0 {
 		return false
 	}
-	// Hindari status berayun. AI boleh menaikkan minat; penurunan dilakukan manual.
-	if contact.LeadStageSource == "ai" && assessment.Stage != leadStageUnqualified && crmStageRank(assessment.Stage) < crmStageRank(contact.LeadStage) {
-		return false
-	}
-	// Jika nilainya sama, AI tetap boleh menyimpan alasan pada status lama/system
-	// atau status manual yang sudah dibuka kembali. Sumber aktivitas dipertahankan.
-	return assessment.Stage != contact.LeadStage || contact.LeadStageSource != "activity"
+	return true
 }
 
-func crmStageRank(stage string) int {
-	switch stage {
-	case leadStageCold:
-		return 1
-	case leadStageWarm:
-		return 2
-	case leadStageHot:
-		return 3
-	case leadStageCustomer:
-		return 4
-	default:
-		return 0
+func crmStageRankWithDefs(stage string, defs map[string]models.LeadStageDef) int {
+	if d, ok := defs[stage]; ok {
+		return d.Rank
 	}
+	return -1
 }

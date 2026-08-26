@@ -86,6 +86,8 @@ func Init() {
 		&models.MediaAsset{},
 		&models.LearningRun{}, &models.LearningPattern{}, &models.LearningSnapshot{}, &models.LearningConfig{},
 		&models.PatternUsageLog{},
+		&models.LeadStageDef{}, &models.LeadLabelConfig{}, &models.LabelRule{},
+		&models.ConversationRead{},
 		&models.GroupGuardConfig{}, &models.GroupModerationLog{},
 		&models.MetaConversionEvent{},
 	)
