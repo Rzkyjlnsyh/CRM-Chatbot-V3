@@ -88,14 +88,14 @@ func StartLearning(c *gin.Context) {
 		return
 	}
 	c.JSON(202, gin.H{"data": gin.H{
-		"run_id":       result.ID,
-		"status":       "pending",
-		"message":      "Learning dimulai di background. Cek status secara berkala.",
-		"start_date":   startDate,
-		"end_date":     endDate,
-		"total_chats":  totalChats,
-		"human_chats":  humanChats,
-		"contacts":     contacts,
+		"run_id":      result.ID,
+		"status":      "pending",
+		"message":     "Learning dimulai di background. Cek status secara berkala.",
+		"start_date":  startDate,
+		"end_date":    endDate,
+		"total_chats": totalChats,
+		"human_chats": humanChats,
+		"contacts":    contacts,
 	}})
 }
 
@@ -131,18 +131,41 @@ func GetLearningRun(c *gin.Context) {
 }
 
 // GetLearningPatterns godoc
-// GET /api/agents/:id/learning/patterns
+// GET /api/agents/:id/learning/patterns?status=suggested&page=1&limit=50
+// Respon: { patterns, total, page, limit } — total = jumlah SELURUH pola
+// (bukan hanya halaman ini) supaya UI menampilkan angka yang utuh.
 func GetLearningPatterns(c *gin.Context) {
 	agentID := currentAgentID(c)
 	status := c.DefaultQuery("status", "suggested") // suggested, applied, rejected, all
 
-	var patterns []models.LearningPattern
-	q := database.DB.Where("agent_id = ?", agentID)
-	if status != "all" {
-		q = q.Where("status = ?", status)
+	page := 1
+	if p, err := strconv.Atoi(c.DefaultQuery("page", "1")); err == nil && p > 0 {
+		page = p
 	}
-	q.Order("closing_impact desc, usage_count desc, confidence desc").Limit(50).Find(&patterns)
-	c.JSON(200, gin.H{"data": patterns})
+	limit := 50
+	if l, err := strconv.Atoi(c.DefaultQuery("limit", "50")); err == nil && l > 0 {
+		limit = l
+	}
+	if limit > 200 {
+		limit = 200
+	}
+
+	base := database.DB.Model(&models.LearningPattern{}).Where("agent_id = ?", agentID)
+	if status != "all" {
+		base = base.Where("status = ?", status)
+	}
+	var total int64
+	base.Count(&total)
+
+	var patterns []models.LearningPattern
+	base.Order("closing_impact desc, usage_count desc, confidence desc").
+		Offset((page - 1) * limit).Limit(limit).Find(&patterns)
+	c.JSON(200, gin.H{"data": gin.H{
+		"patterns": patterns,
+		"total":    total,
+		"page":     page,
+		"limit":    limit,
+	}})
 }
 
 // ApplyLearningPattern godoc

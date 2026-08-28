@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from './services/api';
-import type { Analytics, AIMetrics, Contact, ChatMsg, ConversationBrief, Broadcast, BroadcastDetailData, BroadcastSafetyForm, BroadcastConsentSummary, WAGroup, GroupGuardConfig, GroupModerationLog, LabelInfo, ScheduledMessage, AutoReply, Template, SavedContact, SavedContactsResp, LeadStage, FollowUp, Agent, KnowledgeItem, Handoff, CrawlJob, CrawlPage, KnowledgeUsage, ScheduledStatus, ApiSettings, Flow, Product, ProductOrder, AIForm, AIFormSubmission, MediaAsset, LearningStatus, LearningScore, LearningRun, LearningRunDetail, LearningPattern, LearningSnapshot, LearningConfig, MetaConfigData, LeadStageDef, LabelRule, PipelineData } from './types';
+import type { Analytics, AIMetrics, Contact, ChatMsg, ConversationBrief, Broadcast, BroadcastDetailData, BroadcastSafetyForm, BroadcastConsentSummary, WAGroup, GroupGuardConfig, GroupModerationLog, LabelInfo, ScheduledMessage, AutoReply, Template, SavedContact, SavedContactsResp, LeadStage, FollowUp, Agent, KnowledgeItem, Handoff, CrawlJob, CrawlPage, KnowledgeUsage, ScheduledStatus, ApiSettings, Flow, Product, ProductOrder, AIForm, AIFormSubmission, MediaAsset, LearningStatus, LearningScore, LearningRun, LearningRunDetail, LearningPatternPage, LearningSnapshot, LearningConfig, MetaConfigData, LeadStageDef, LabelRule, PipelineData } from './types';
 
 type ContactList = { number: string; name: string }[];
 
@@ -1153,10 +1153,10 @@ export function useLearningRun(agentId: number, runId: number) {
   });
 }
 
-export function useLearningPatterns(agentId: number, status?: string) {
-  return useQuery<LearningPattern[]>({
-    queryKey: ['learning-patterns', agentId, status],
-    queryFn: async () => (await api.get(`/agents/${agentId}/learning/patterns`, { params: status ? { status } : {} })).data.data,
+export function useLearningPatterns(agentId: number, status?: string, page = 1, limit = 50) {
+  return useQuery<LearningPatternPage>({
+    queryKey: ['learning-patterns', agentId, status, page, limit],
+    queryFn: async () => (await api.get(`/agents/${agentId}/learning/patterns`, { params: { status, page, limit } })).data.data,
     enabled: !!agentId,
   });
 }

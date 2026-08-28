@@ -106,6 +106,9 @@ function PatternCard({ pattern, onApply, onReject, loading }: {
 
 export default function LearningPanel({ agentId }: { agentId: number }) {
   const [tab, setTab] = useState(0);
+  // Pagination pola: halaman bertambah, angka total TETAP utuh (dari server).
+  const PATTERNS_PER_PAGE = 50;
+  const [patternsPage, setPatternsPage] = useState(1);
   const isoDate = (d: Date) => {
     const y = d.getFullYear();
     const m = String(d.getMonth() + 1).padStart(2, '0');
@@ -124,7 +127,11 @@ export default function LearningPanel({ agentId }: { agentId: number }) {
 
   const { data: status, isLoading } = useLearningStatus(agentId);
   const { data: score } = useLearningScore(agentId);
-  const { data: patterns } = useLearningPatterns(agentId, 'suggested');
+  const { data: patternPage } = useLearningPatterns(agentId, 'suggested', patternsPage, PATTERNS_PER_PAGE);
+  const patterns = patternPage?.patterns;
+  const totalPatterns = patternPage?.total ?? 0;
+  const patternsTotal = status?.patterns_suggested ?? totalPatterns;
+  const patternsHasMore = patternPage ? patternsPage * PATTERNS_PER_PAGE < patternPage.total : false;
   const { data: snapshots } = useLearningSnapshots(agentId);
   const { data: config } = useLearningConfig(agentId);
   const waSync = useLabels(agentId);
@@ -324,7 +331,7 @@ export default function LearningPanel({ agentId }: { agentId: number }) {
 
       <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2 }}>
         <Tab icon={<AutoFixHighIcon />} iconPosition="start" label="Jalankan" />
-        <Tab icon={<LightbulbIcon />} iconPosition="start" label={`Pola (${patterns?.length || 0})`} />
+        <Tab icon={<LightbulbIcon />} iconPosition="start" label={`Pola (${patternsTotal})`} />
         <Tab icon={<HistoryIcon />} iconPosition="start" label={`Versi (${snapshots?.length || 0})`} />
         <Tab icon={<SettingsIcon />} iconPosition="start" label="Konfigurasi" />
       </Tabs>
@@ -377,7 +384,10 @@ export default function LearningPanel({ agentId }: { agentId: number }) {
         <Stack spacing={2}>
           {patterns && patterns.length > 0 && (
             <Stack direction="row" spacing={1} sx={{ alignItems: 'center', justifyContent: 'space-between' }}>
-              <Typography variant="body2" color="text.secondary">{patterns.length} pola menunggu review</Typography>
+              <Typography variant="body2" color="text.secondary">
+                {patternsTotal} pola menunggu review
+                {patternsHasMore && ` · menampilkan ${Math.min(patternsPage * PATTERNS_PER_PAGE, patternsTotal)}`}
+              </Typography>
               <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
                 <Typography variant="caption">Min confidence:</Typography>
                 <Select size="small" value={applyMinConf} onChange={(e) => setApplyMinConf(e.target.value as number)}
@@ -399,12 +409,20 @@ export default function LearningPanel({ agentId }: { agentId: number }) {
               <Typography variant="body2" color="text.disabled">Jalankan learning dulu dari tab "Jalankan".</Typography>
             </Paper>
           ) : (
-            patterns.map(p => (
-              <PatternCard key={p.id} pattern={p}
-                onApply={() => handleApply(p.id)}
-                onReject={() => handleReject(p.id)}
-                loading={busy} />
-            ))
+            <Stack spacing={2}>
+              {patterns.map(p => (
+                <PatternCard key={p.id} pattern={p}
+                  onApply={() => handleApply(p.id)}
+                  onReject={() => handleReject(p.id)}
+                  loading={busy} />
+              ))}
+              {patternsHasMore && (
+                <Button variant="outlined" fullWidth startIcon={busy ? <CircularProgress size={16} /> : null}
+                  onClick={() => setPatternsPage(p => p + 1)} disabled={busy}>
+                  Muat Lebih (sisa {patternsTotal - patternsPage * PATTERNS_PER_PAGE} pola)
+                </Button>
+              )}
+            </Stack>
           )}
         </Stack>
       )}

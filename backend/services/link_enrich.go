@@ -91,30 +91,40 @@ type mapsParseResult struct {
 
 func enrichMapsLink(raw string) string {
 	resolved, err := resolvePublicURL(raw, 8)
-	if err != nil {
-		// Tetap beri petunjuk minimal meski resolve gagal.
-		return "[KONTEKS LINK LOKASI]\n" +
-			"URL: " + raw + "\n" +
-			"Catatan: Link Google Maps terdeteksi tetapi belum bisa dibuka otomatis. " +
-			"Anggap pelanggan sudah membagikan lokasi; jangan minta kirim pin ulang kecuali benar-benar ambigu."
-	}
-	parsed := parseMapsURL(resolved)
-	if parsed.FinalURL == "" {
-		parsed.FinalURL = resolved
-	}
-	// Coba juga parse URL asli (kadang short link tidak expand penuh di path).
-	if !parsed.HasCoord && parsed.PlaceName == "" && parsed.Query == "" {
-		parsed = parseMapsURL(raw)
+	if err == nil {
+		parsed := parseMapsURL(resolved)
 		if parsed.FinalURL == "" {
 			parsed.FinalURL = resolved
 		}
+		// Coba juga parse URL asli (kadang short link tidak expand penuh di path).
+		if !parsed.HasCoord && parsed.PlaceName == "" && parsed.Query == "" {
+			parsed = parseMapsURL(raw)
+			if parsed.FinalURL == "" {
+				parsed.FinalURL = resolved
+			}
+		}
+		return buildMapsBlock(raw, resolved, parsed)
 	}
+	// Resolve gagal (offline/lemot) — URL asli sering SUDAH memuat koordinat
+	// (@lat,lng, !3d!4d, ?q=). Manfaatkan itu; note minimal hanya bila URL
+	// asli juga tidak berisi informasi.
+	parsed := parseMapsURL(raw)
+	if parsed.HasCoord || parsed.PlaceName != "" || parsed.Query != "" {
+		return buildMapsBlock(raw, raw, parsed)
+	}
+	return "[KONTEKS LINK LOKASI]\n" +
+		"URL: " + raw + "\n" +
+		"Catatan: Link Google Maps terdeteksi tetapi belum bisa dibuka otomatis. " +
+		"Anggap pelanggan sudah membagikan lokasi; jangan minta kirim pin ulang kecuali benar-benar ambigu."
+}
 
+// buildMapsBlock merangkai blok konteks lokasi yang dibaca dari hasil parse.
+func buildMapsBlock(raw, finalURL string, parsed mapsParseResult) string {
 	var lines []string
 	lines = append(lines, "[KONTEKS LINK LOKASI TERBACA]")
 	lines = append(lines, "URL asli: "+raw)
-	if parsed.FinalURL != "" && !strings.EqualFold(parsed.FinalURL, raw) {
-		lines = append(lines, "URL final: "+parsed.FinalURL)
+	if finalURL != "" && !strings.EqualFold(finalURL, raw) {
+		lines = append(lines, "URL final: "+finalURL)
 	}
 	if parsed.PlaceName != "" {
 		lines = append(lines, "Nama tempat (dari link): "+parsed.PlaceName)

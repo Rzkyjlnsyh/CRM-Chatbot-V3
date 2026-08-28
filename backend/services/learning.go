@@ -107,7 +107,8 @@ func processLearningRun(runID, agentID uint, startDate, endDate *time.Time) {
 	if err != nil {
 		log.Printf("Learning: gagal ekstrak pola global: %v (lanjut)", err)
 	}
-	savePatterns(run.ID, agentID, "", "", "human", patterns)
+	existingKeys := loadSuggestedDedupKeys(agentID)
+	savePatterns(run.ID, agentID, "", "", "human", patterns, existingKeys)
 
 	// 4. Pola per-label — pelajari SEMUA label & cara penanganannya menuju closing.
 	for _, l := range agentLabels(agentID) {
@@ -120,7 +121,7 @@ func processLearningRun(runID, agentID uint, startDate, endDate *time.Time) {
 			log.Printf("Learning: label %q gagal: %v", l.Name, err)
 			continue
 		}
-		savePatterns(run.ID, agentID, l.LabelID, l.Name, "human", lp)
+		savePatterns(run.ID, agentID, l.LabelID, l.Name, "human", lp, existingKeys)
 	}
 
 	// 4b. Belajar dari chat AI sendiri yang terbukti menuju closing (supervised
@@ -132,7 +133,7 @@ func processLearningRun(runID, agentID uint, startDate, endDate *time.Time) {
 			if aiPatterns, aerr := extractPatterns(agentID, aiChats, styleProfile); aerr != nil {
 				log.Printf("Learning: ekstrak pola AI-success gagal: %v (lanjut)", aerr)
 			} else {
-				savePatterns(run.ID, agentID, "", "", "ai_success", aiPatterns)
+				savePatterns(run.ID, agentID, "", "", "ai_success", aiPatterns, existingKeys)
 			}
 		}
 	}
@@ -193,10 +194,60 @@ func failLearningRun(run *models.LearningRun, msg string) {
 	log.Printf("Learning: run %d gagal: %s", run.ID, msg)
 }
 
+// patternDedupKey = kunci dedup pola yang ternormalisasi: huruf kecil,
+// spasi dirapikan, tanda baca & emoji ujung dihapus. Variasi penulisan AI
+// ("Mau order minyak?" vs "Mau order minyak... 🙏") dianggap POLA SAMA.
+func patternDedupKey(trigger, template string) string {
+	norm := func(s string) string {
+		s = strings.ToLower(strings.Join(strings.Fields(s), " "))
+		r := []rune(s)
+		for len(r) > 0 {
+			last := r[len(r)-1]
+			isPunct := strings.ContainsRune(".!?…*_-", last)
+			isEmoji := (last >= 0x1F000 && last <= 0x1FAFF) ||
+				(last >= 0x2600 && last <= 0x27BF) ||
+				(last >= 0x2190 && last <= 0x21FF) ||
+				(last >= 0xFE00 && last <= 0xFE0F) ||
+				(last >= 0x2700 && last <= 0x27BF) ||
+				(last >= 0x1F900 && last <= 0x1F9FF)
+			if !isPunct && !isEmoji {
+				break
+			}
+			r = r[:len(r)-1]
+		}
+		return strings.TrimSpace(string(r))
+	}
+	return norm(trigger) + "||" + norm(template)
+}
+
+// loadSuggestedDedupKeys memuat kunci dedup semua pola suggested milik agent.
+// Dipakai sekali per run supaya pola hasil ekstraksi ulang (window tumpang
+// tindih / AI menulis ulang) tidak menumpuk jadi baris dobel.
+func loadSuggestedDedupKeys(agentID uint) map[string]bool {
+	keys := map[string]bool{}
+	var rows []struct {
+		TriggerContext   string
+		ResponseTemplate string
+	}
+	database.DB.Model(&models.LearningPattern{}).
+		Where("agent_id = ? AND status = ?", agentID, "suggested").
+		Select("trigger_context", "response_template").Find(&rows)
+	for _, r := range rows {
+		keys[patternDedupKey(r.TriggerContext, r.ResponseTemplate)] = true
+	}
+	return keys
+}
+
 // savePatterns menyimpan pola hasil ekstraksi ke DB dengan konteks label.
 // source: "human" (dari CS manusia) atau "ai_success" (dari chat AI yg closing).
-func savePatterns(runID, agentID uint, labelID, labelName, source string, patterns []ExtractedPattern) {
+// existing = kunci dedup pola suggested yang sudah ada (hasil loadSuggestedDedupKeys).
+func savePatterns(runID, agentID uint, labelID, labelName, source string, patterns []ExtractedPattern, existing map[string]bool) {
 	for _, p := range patterns {
+		key := patternDedupKey(p.TriggerContext, p.ResponseTemplate)
+		if existing[key] {
+			continue // pola sudah ada (identik/varian penulisan) — jangan menumpuk
+		}
+		existing[key] = true
 		conf := p.Confidence
 		if source == "ai_success" && conf > 0.75 {
 			conf = 0.75 // konservatif: pola dari AI sendiri belum setinggi pola CS manusia
@@ -383,27 +434,41 @@ func MaybeTriggerIncrementalLearning(agentID uint) {
 	})
 }
 
+// realtimeWindowStart menghitung awal window analisa run realtime:
+// analisa hanya chat BARU sejak kursor terakhir (tidak mengulang 24 jam
+// yang sama tiap 15 menit → mencegah ekstraksi ulang & pola dobel).
+// Kursor lebih tua dari 24 jam → clamp ke 24 jam (window standar).
+func realtimeWindowStart(cfg models.LearningConfig, now time.Time) time.Time {
+	start := now.Add(-24 * time.Hour)
+	if cfg.LastRealtimeRunAt != nil && cfg.LastRealtimeRunAt.After(start) && cfg.LastRealtimeRunAt.Before(now) {
+		start = *cfg.LastRealtimeRunAt
+	}
+	return start
+}
+
 // runIncrementalLearning menjalankan satu putaran analisa ringan real-time:
-// chat CS manusia + chat AI-closing 24 jam terakhir → pola baru (dedup + cap)
-// masuk suggested. Memakai SATU LearningRun bertanda "[realtime]" per hari
-// agar tab Runs tidak dibanjiri baris.
+// chat CS manusia + chat AI-closing BARU sejak run terakhir → pola baru
+// (dedup + cap) masuk suggested. Memakai SATU LearningRun bertanda
+// "[realtime]" per hari agar tab Runs tidak dibanjiri baris.
 func runIncrementalLearning(agentID uint) {
-	start := time.Now().Add(-24 * time.Hour)
-	end := time.Now()
+	cfg := GetLearningConfig(agentID)
+	now := time.Now()
+	start := realtimeWindowStart(cfg, now)
+	end := now
 	humanChats, err := loadHumanCSChats(agentID, &start, &end)
 	if err != nil || len(humanChats) < 3 {
 		return
 	}
-	cfg := GetLearningConfig(agentID)
 	run := ensureIncrementalRun(agentID)
 	if run.ID == 0 {
 		return
 	}
 	// Tanpa style profile: pola cukup; profil gaya tetap dijalankan oleh run
 	// penuh (manual/jadwal) supaya biaya AI incremental tetap minimal.
+	existingKeys := loadSuggestedDedupKeys(agentID)
 	patterns, perr := extractPatterns(agentID, humanChats, StyleProfile{})
 	if perr == nil {
-		savePatternsDedup(run.ID, agentID, "", "", "human", patterns, cfg.MaxPatternsPerRun)
+		savePatternsDedup(run.ID, agentID, "", "", "human", patterns, cfg.MaxPatternsPerRun, existingKeys)
 	} else {
 		log.Printf("Learning[realtime]: agent %d pola gagal: %v", agentID, perr)
 	}
@@ -411,18 +476,22 @@ func runIncrementalLearning(agentID uint) {
 		aiChats := loadAISuccessChats(agentID, &start, &end)
 		if len(aiChats) >= 3 {
 			if ap, aerr := extractPatterns(agentID, aiChats, StyleProfile{}); aerr == nil {
-				savePatternsDedup(run.ID, agentID, "", "", "ai_success", ap, cfg.MaxPatternsPerRun)
+				savePatternsDedup(run.ID, agentID, "", "", "ai_success", ap, cfg.MaxPatternsPerRun, existingKeys)
 			}
 		}
 	}
-	now := time.Now()
+	// Kursor maju HANYA bila analisa sukses — gagal → window diulang next run.
+	if perr == nil {
+		cfg.LastRealtimeRunAt = &now
+		_ = SaveLearningConfig(cfg)
+	}
 	var pc int64
 	database.DB.Model(&models.LearningPattern{}).Where("learning_run_id = ?", run.ID).Count(&pc)
 	database.DB.Model(&run).Updates(map[string]any{
-		"total_chats":  len(humanChats),
-		"human_chats":  len(humanChats),
+		"total_chats":   len(humanChats),
+		"human_chats":   len(humanChats),
 		"pattern_count": int(pc),
-		"completed_at": &now,
+		"completed_at":  &now,
 	})
 }
 
@@ -449,7 +518,7 @@ func ensureIncrementalRun(agentID uint) models.LearningRun {
 
 // savePatternsDedup menyimpan pola hasil ekstraksi dengan dedup (pola
 // suggested yang sama tidak diduplikasi) dan batas jumlah per putaran.
-func savePatternsDedup(runID, agentID uint, labelID, labelName, source string, patterns []ExtractedPattern, cap int) {
+func savePatternsDedup(runID, agentID uint, labelID, labelName, source string, patterns []ExtractedPattern, cap int, existing map[string]bool) {
 	if cap <= 0 {
 		cap = 10
 	}
@@ -458,13 +527,11 @@ func savePatternsDedup(runID, agentID uint, labelID, labelName, source string, p
 		if saved >= cap {
 			break
 		}
-		var dup int64
-		database.DB.Model(&models.LearningPattern{}).
-			Where("agent_id = ? AND trigger_context = ? AND response_template = ? AND status = ?",
-				agentID, p.TriggerContext, p.ResponseTemplate, "suggested").Count(&dup)
-		if dup > 0 {
-			continue
+		key := patternDedupKey(p.TriggerContext, p.ResponseTemplate)
+		if existing[key] {
+			continue // pola identik/varian penulisan sudah ada — tidak menumpuk
 		}
+		existing[key] = true
 		conf := p.Confidence
 		if source == "ai_success" && conf > 0.75 {
 			conf = 0.75

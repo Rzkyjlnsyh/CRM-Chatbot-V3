@@ -732,6 +732,15 @@ export interface LearningSnapshot {
   created_at: string;
 }
 
+// LearningPatternPage = halaman pola (pagination) — total = jumlah SELURUH
+// pola pada status tsb, bukan hanya halaman ini.
+export interface LearningPatternPage {
+  patterns: LearningPattern[];
+  total: number;
+  page: number;
+  limit: number;
+}
+
 export interface LearningConfig {
   id: number;
   agent_id: number;
