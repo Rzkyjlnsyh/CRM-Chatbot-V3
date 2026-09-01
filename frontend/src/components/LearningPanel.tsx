@@ -104,6 +104,25 @@ function PatternCard({ pattern, onApply, onReject, loading }: {
   );
 }
 
+// formatLastRunAt: "28/08/2026 17:43 · 2 jam lalu" — jam penting karena
+// learning realtime berjalan berkali-kali sehari; bukti "masih nyala"
+// terlihat langsung di kartu status, tanpa buka log.
+function formatLastRunAt(iso?: string | null): string {
+  if (!iso) return 'Belum pernah';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return 'Belum pernah';
+  const local = d.toLocaleString('id-ID', {
+    day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit',
+  });
+  const diffMin = Math.floor((Date.now() - d.getTime()) / 60000);
+  let rel: string;
+  if (diffMin < 1) rel = 'baru saja';
+  else if (diffMin < 60) rel = `${diffMin} menit lalu`;
+  else if (diffMin < 60 * 24) rel = `${Math.floor(diffMin / 60)} jam lalu`;
+  else rel = `${Math.floor(diffMin / 1440)} hari lalu`;
+  return `${local} · ${rel}`;
+}
+
 export default function LearningPanel({ agentId }: { agentId: number }) {
   const [tab, setTab] = useState(0);
   // Pagination pola: halaman bertambah, angka total TETAP utuh (dari server).
@@ -248,7 +267,7 @@ export default function LearningPanel({ agentId }: { agentId: number }) {
               <Box>
                 <Typography variant="caption" color="text.secondary">Learning terakhir</Typography>
                 <Typography variant="body2" sx={{ fontWeight: 700 }}>
-                  {status?.last_run ? new Date(status.last_run.created_at).toLocaleDateString('id-ID') : 'Belum pernah'}
+                  {status?.last_run ? formatLastRunAt(status.last_run.completed_at ?? status.last_run.created_at) : 'Belum pernah'}
                 </Typography>
               </Box>
             </Stack>

@@ -358,9 +358,13 @@ func SaveLearningConfigAPI(c *gin.Context) {
 func GetLearningStatus(c *gin.Context) {
 	agentID := currentAgentID(c)
 
-	// Dapatkan run terakhir + statistik
+	// Run paling mutakhir = yang terakhir SELESAI (atau sedang berjalan).
+	// COALESCE: run running (completed_at null) tetap muncul dengan waktu
+	// mulai — kartu status menunjukkan aktivitas nyata, bukan id terakhir.
 	var lastRun models.LearningRun
-	database.DB.Where("agent_id = ?", agentID).Order("id desc").First(&lastRun)
+	database.DB.Where("agent_id = ?", agentID).
+		Order("COALESCE(completed_at, created_at) DESC").
+		First(&lastRun)
 
 	var suggestedCount, appliedCount, rejectedCount int64
 	database.DB.Model(&models.LearningPattern{}).Where("agent_id = ? AND status = ?", agentID, "suggested").Count(&suggestedCount)
