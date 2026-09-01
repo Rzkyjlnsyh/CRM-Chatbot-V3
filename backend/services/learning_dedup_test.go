@@ -57,9 +57,12 @@ func TestSavePatternsSkipsNormalizedDuplicates(t *testing.T) {
 	pat := func(trigger, template string) ExtractedPattern {
 		return ExtractedPattern{PatternType: "phrase", TriggerContext: trigger, ResponseTemplate: template, Confidence: 0.8}
 	}
-	savePatterns(1, agentID, "", "", "human", []ExtractedPattern{
+	// Return = jumlah yang TERSIMPAN (dipakai log observabilitas).
+	if got := savePatterns(1, agentID, "", "", "human", []ExtractedPattern{
 		pat("customer minta harga", "Boleh, minyaknya Rp75.000 ya kak"),
-	}, existing)
+	}, existing); got != 1 {
+		t.Fatalf("pola baru harus menyimpan 1, dapat %d", got)
+	}
 
 	var n int64
 	db.Model(&models.LearningPattern{}).Where("agent_id = ? AND status = ?", agentID, "suggested").Count(&n)
@@ -69,9 +72,11 @@ func TestSavePatternsSkipsNormalizedDuplicates(t *testing.T) {
 
 	// Run berikutnya (window tumpang tindih): varian penulisan → TIDAK menumpuk.
 	existing2 := loadSuggestedDedupKeys(agentID)
-	savePatterns(2, agentID, "", "", "human", []ExtractedPattern{
+	if got := savePatterns(2, agentID, "", "", "human", []ExtractedPattern{
 		pat("CUSTOMER MINTA HARGA", "Boleh, minyaknya Rp75.000 ya kak..."),
-	}, existing2)
+	}, existing2); got != 0 {
+		t.Fatalf("varian harus didedup (0 tersimpan), dapat %d", got)
+	}
 	db.Model(&models.LearningPattern{}).Where("agent_id = ? AND status = ?", agentID, "suggested").Count(&n)
 	if n != 1 {
 		t.Fatalf("varian harus didedup, dapat %d", n)
@@ -79,22 +84,22 @@ func TestSavePatternsSkipsNormalizedDuplicates(t *testing.T) {
 
 	// Pola baru → masuk.
 	existing3 := loadSuggestedDedupKeys(agentID)
-	savePatterns(2, agentID, "", "", "human", []ExtractedPattern{
+	if got := savePatterns(2, agentID, "", "", "human", []ExtractedPattern{
 		pat("customer tanya stok", "Stok masih ada kak, siap kirim hari ini"),
-	}, existing3)
+	}, existing3); got != 1 {
+		t.Fatalf("pola baru harus menyimpan 1, dapat %d", got)
+	}
 	db.Model(&models.LearningPattern{}).Where("agent_id = ? AND status = ?", agentID, "suggested").Count(&n)
 	if n != 2 {
 		t.Fatalf("pola baru harus masuk, dapat %d", n)
 	}
 
-	// Dedup tidak menutup status lain: applied boleh punya pola serupa (beda status).
+	// Dedup juga menghitung cap: 2 pola di cap 1 → hanya 1 tersimpan.
 	existing4 := loadSuggestedDedupKeys(agentID)
-	savePatterns(3, agentID, "", "", "human", []ExtractedPattern{
-		pat("customer tanya stok", "Stok masih ada kak, siap kirim hari ini"),
-	}, existing4)
-	db.Model(&models.LearningPattern{}).Where("agent_id = ? AND status = ?", agentID, "suggested").Count(&n)
-	if n != 2 {
-		t.Fatalf("duplikat suggested harus tetap didedup, dapat %d", n)
+	if got := savePatternsDedup(2, agentID, "", "", "human", []ExtractedPattern{
+		pat("a", "t1"), pat("b", "t2"),
+	}, 1, existing4); got != 1 {
+		t.Fatalf("cap harus membatasi (1 tersimpan), dapat %d", got)
 	}
 }
 
