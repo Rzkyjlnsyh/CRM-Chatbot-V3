@@ -511,6 +511,11 @@ func (w *waInstance) handleEvent(evt interface{}) {
 			})
 		}
 		return
+	case *events.ChatPresence:
+		// Indikator "pelanggan sedang mengetik" — diteruskan ke Inbox via handler.
+		if onChatPresence != nil {
+			Go("chatPresence", func() { onChatPresence(w.agentID, v.Sender.User, string(v.State)) })
+		}
 	case *events.Message:
 		// Pesan manual dari HP/perangkat tertaut lain dicatat sebagai takeover manusia.
 		if pm := v.Message.GetProtocolMessage(); pm != nil && pm.GetKey() != nil {
@@ -1718,6 +1723,27 @@ func (w *waInstance) Suspend() {
 	}
 	w.qrCode = ""
 	w.status = "disconnected"
+}
+
+// ProfilePictureURL mengambil URL thumbnail foto profil WhatsApp (jika
+// privasi pengguna mengizinkan). Dipakai avatar kontak di Inbox.
+func (w *waInstance) ProfilePictureURL(ctx context.Context, sender string) (string, error) {
+	w.mu.Lock()
+	client := w.client
+	connected := client != nil && client.IsConnected() && client.IsLoggedIn()
+	w.mu.Unlock()
+	if !connected {
+		return "", errors.New("WhatsApp belum terhubung")
+	}
+	jid := types.NewJID(sender, types.DefaultUserServer)
+	info, err := client.GetProfilePictureInfo(ctx, jid, &whatsmeow.GetProfilePictureParams{Preview: true})
+	if err != nil {
+		return "", err
+	}
+	if info == nil || strings.TrimSpace(info.URL) == "" {
+		return "", errors.New("foto profil tidak tersedia")
+	}
+	return info.URL, nil
 }
 
 // sentBySystemCacheTTL = berapa lama wa_msg_id kiriman sistem diingat.

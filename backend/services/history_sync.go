@@ -39,6 +39,14 @@ var onMessageRevoke MessageRevokeHandler
 // SetMessageRevokeHandler dipasang sekali saat startup worker.
 func SetMessageRevokeHandler(handler MessageRevokeHandler) { onMessageRevoke = handler }
 
+// ChatPresenceHandler = status mengetik kontak (composing/paused) dari WA.
+type ChatPresenceHandler func(agentID uint, sender string, state string)
+
+var onChatPresence ChatPresenceHandler
+
+// SetChatPresenceHandler dipasang sekali saat startup worker.
+func SetChatPresenceHandler(handler ChatPresenceHandler) { onChatPresence = handler }
+
 // HistorySyncStatus = kondisi sinkronisasi terakhir per agent (in-memory).
 type HistorySyncStatus struct {
 	AgentID    uint

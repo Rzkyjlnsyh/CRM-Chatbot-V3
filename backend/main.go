@@ -63,6 +63,7 @@ func main() {
 	handlers.CleanupBroadcastJunk() // hapus thread sistem @broadcast/@newsletter yang bocor
 	services.SetHistorySyncHandler(handlers.OnWAHistorySync)
 	services.SetMessageRevokeHandler(handlers.OnWAMessageRevoke)
+	services.SetChatPresenceHandler(handlers.OnWAChatPresence)
 	services.StartReconnectWatchdogCtx(appCtx, 90*time.Second)
 
 	// Lanjutkan broadcast yang sempat terhenti saat server mati; tandai jadwal yang nyangkut.
@@ -318,6 +319,12 @@ func main() {
 			auth.DELETE("/agents/:id/media-assets/:assetId", handlers.DeleteMediaAsset)
 			auth.GET("/agents/:id/history-media/:cid", handlers.GetHistoryMedia)
 			auth.GET("/agents/:id/history-sync/status", handlers.GetHistorySyncStatus)
+			auth.GET("/agents/:id/inbox/events", handlers.InboxEvents)
+			auth.GET("/agents/:id/inbox/unread-summary", handlers.InboxUnreadSummary)
+			auth.GET("/agents/:id/link-preview", handlers.LinkPreview)
+			auth.GET("/agents/:id/profile-picture", handlers.ServeProfilePicture)
+			auth.POST("/agents/:id/inbox/client-debug", handlers.InboxClientDebug)
+			auth.GET("/agents/:id/inbox/client-debug", handlers.InboxClientDebugDump)
 		}
 	}
 

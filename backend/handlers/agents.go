@@ -218,6 +218,7 @@ func OnWAOwnMessage(agentID uint, recipient types.JID, in services.IncomingMessa
 	}).Error; err != nil {
 		log.Printf("Gagal mencatat balasan manual perangkat (agent %d, %s): %v", agentID, num, err)
 	}
+	PublishInboxEvent(agentID, "new_message", num, in.WAMsgID)
 	// Real-time learning: balasan CS manusia baru = materi belajar terbaru.
 	services.MaybeTriggerIncrementalLearning(agentID)
 }
@@ -1026,12 +1027,16 @@ func mediaPlaceholder(mediaType, fileName string) string {
 }
 
 func logTurn(agentID uint, num, msg, reply string, fromHuman bool, replyTo string, replyText string) {
-	if err := database.DB.Create(&models.ChatHistory{
+	row := models.ChatHistory{
 		AgentID: agentID, Sender: num, Message: msg, Reply: reply, FromHuman: fromHuman,
 		ReplyTo: replyTo, ReplyText: replyText,
-	}).Error; err != nil {
-		log.Printf("Gagal logTurn (agent %d, %s): %v", agentID, num, err)
 	}
+	if err := database.DB.Create(&row).Error; err != nil {
+		log.Printf("Gagal logTurn (agent %d, %s): %v", agentID, num, err)
+		return
+	}
+	// Realtime: browser yang membuka inbox langsung melihat pesan masuk.
+	PublishInboxEvent(agentID, "new_message", num, "")
 }
 
 // --- Cek Ongkir Realtime via RajaOngkir ---

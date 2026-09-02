@@ -17,8 +17,15 @@ func setupHistorySyncTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("db: %v", err)
 	}
-	if err := db.AutoMigrate(&models.ChatHistory{}, &models.Contact{}); err != nil {
+	if err := db.AutoMigrate(&models.ChatHistory{}, &models.Contact{}, &models.ConversationRead{}, &models.Tenant{}, &models.Agent{}); err != nil {
 		t.Fatalf("migrate: %v", err)
+	}
+	// DB memori shared antar-test → seed idempoten.
+	if err := db.Where(&models.Tenant{ID: 1}).FirstOrCreate(&models.Tenant{ID: 1}).Error; err != nil {
+		t.Fatalf("tenant: %v", err)
+	}
+	if err := db.Where(&models.Agent{ID: 1, TenantID: 1}).FirstOrCreate(&models.Agent{ID: 1, TenantID: 1}).Error; err != nil {
+		t.Fatalf("agent: %v", err)
 	}
 	database.DB = db
 	return db
