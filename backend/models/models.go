@@ -80,6 +80,14 @@ type ChatHistory struct {
 	DeliveryStatus          string     `gorm:"size:24;index;default:sent" json:"delivery_status"` // sent, delivered, read_inferred, read, played, pending_retry, failed_send
 	SendError               string     `gorm:"type:text" json:"send_error,omitempty"`
 	RetryCount              int        `gorm:"not null;default:0" json:"retry_count"`
+	// ReplySource membedakan asal balasan: "ai" (default), "human_device",
+	// "human_inbox", "history_sync" (import riwayat WA). Dipakai Learning agar
+	// riwayat impor TIDAK dihitung sebagai materi belajar.
+	ReplySource string `gorm:"size:24;default:ai" json:"reply_source,omitempty"`
+	// MediaMetadata = protobuf pesan riwayat (HistorySync) untuk unduh media
+	// on-demand; MediaFetchStatus = pending|done|failed.
+	MediaMetadata    []byte `gorm:"type:blob" json:"-"`
+	MediaFetchStatus string `gorm:"size:24" json:"media_fetch_status,omitempty"`
 	NextRetryAt             *time.Time `gorm:"index" json:"next_retry_at,omitempty"`
 	CreatedAt               time.Time  `json:"created_at"`
 }

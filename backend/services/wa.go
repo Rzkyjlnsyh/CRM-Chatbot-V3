@@ -20,6 +20,7 @@ import (
 	"go.mau.fi/whatsmeow/appstate"
 	waBinary "go.mau.fi/whatsmeow/binary"
 	waProto "go.mau.fi/whatsmeow/proto/waE2E"
+	waHistorySync "go.mau.fi/whatsmeow/proto/waHistorySync"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
@@ -500,8 +501,29 @@ func (w *waInstance) handleEvent(evt interface{}) {
 		meta := ReceiptMeta{Recipient: v.Sender.User, Status: status, MessageIDs: ids, Timestamp: v.Timestamp.Unix()}
 		Go("onReceipt", func() { onReceipt(w.agentID, meta) })
 
+	case *events.HistorySync:
+		// Import riwayat WA dari perangkat utama (pola v4) — diport ke fork klien.
+		if onHistorySync != nil && v.Data != nil {
+			Go("historySync", func() {
+				if _, _, err := w.processHistorySync(v.Data, v.Data.GetSyncType() == waHistorySync.HistorySync_FULL); err != nil {
+					log.Printf("WA agent %d history sync: %v", w.agentID, err)
+				}
+			})
+		}
+		return
 	case *events.Message:
 		// Pesan manual dari HP/perangkat tertaut lain dicatat sebagai takeover manusia.
+		if pm := v.Message.GetProtocolMessage(); pm != nil && pm.GetKey() != nil {
+			revoked := pm.GetType() == waProto.ProtocolMessage_REVOKE ||
+				pm.GetEditedMessage() != nil
+			if revoked {
+				id := pm.GetKey().GetID()
+				if id != "" && onMessageRevoke != nil {
+					Go("onMessageRevoke", func() { onMessageRevoke(w.agentID, id, time.Now()) })
+				}
+			}
+			return
+		}
 		// Echo kiriman service SENDIRI tidak punya DeviceSentMeta — disaring lewat cache
 		// sentBySystem + pattern broadcast/newsletter supaya tidak tercatat dobel.
 		if v.Info.IsFromMe {

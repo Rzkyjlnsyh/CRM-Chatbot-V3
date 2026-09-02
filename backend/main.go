@@ -61,6 +61,8 @@ func main() {
 	// Sambungkan ulang semua agent yang sudah ter-link.
 	services.Go("StartAgents", handlers.StartAgents)
 	handlers.CleanupBroadcastJunk() // hapus thread sistem @broadcast/@newsletter yang bocor
+	services.SetHistorySyncHandler(handlers.OnWAHistorySync)
+	services.SetMessageRevokeHandler(handlers.OnWAMessageRevoke)
 	services.StartReconnectWatchdogCtx(appCtx, 90*time.Second)
 
 	// Lanjutkan broadcast yang sempat terhenti saat server mati; tandai jadwal yang nyangkut.
@@ -314,6 +316,8 @@ func main() {
 			auth.GET("/agents/:id/media-assets", handlers.ListMediaAssets)
 			auth.POST("/agents/:id/media-assets", handlers.UploadMediaAsset)
 			auth.DELETE("/agents/:id/media-assets/:assetId", handlers.DeleteMediaAsset)
+			auth.GET("/agents/:id/history-media/:cid", handlers.GetHistoryMedia)
+			auth.GET("/agents/:id/history-sync/status", handlers.GetHistorySyncStatus)
 		}
 	}
 
