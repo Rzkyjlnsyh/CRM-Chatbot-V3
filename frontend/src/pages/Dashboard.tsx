@@ -10,6 +10,7 @@ import LogoutIcon from '@mui/icons-material/Logout';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
 import EditIcon from '@mui/icons-material/EditOutlined';
+import AttachFileIcon from '@mui/icons-material/AttachFile';
 import ManageAccountsOutlinedIcon from '@mui/icons-material/ManageAccountsOutlined';
 import QrCodeIcon from '@mui/icons-material/QrCode';
 import DialpadIcon from '@mui/icons-material/Dialpad';
@@ -281,6 +282,8 @@ export default function Dashboard() {
   const [knowledgeErrors, setKnowledgeErrors] = useState<Record<string, string>>({});
   const [editingKnowledge, setEditingKnowledge] = useState<KnowledgeItem | null>(null);
   const [editingKnowledgeDraft, setEditingKnowledgeDraft] = useState({ question: '', answer: '', tags: '' });
+  const [knowledgeImageFile, setKnowledgeImageFile] = useState<File | null>(null);
+  const knowledgeImageRef = useRef<HTMLInputElement>(null);
   const [editingAIForm, setEditingAIForm] = useState<AIForm | null>(null);
   const [aiFormName, setAIFormName] = useState('');
   const [aiFormGoal, setAIFormGoal] = useState('');
@@ -2805,6 +2808,20 @@ Bantu pelanggan sampai jelas, tertarik, dan siap order. Jika pelanggan sudah men
               onChange={e => setEditingKnowledgeDraft(d => ({ ...d, answer: e.target.value }))} />
             <TextField size="small" label="Tags (pisahkan dengan koma)" value={editingKnowledgeDraft.tags}
               onChange={e => setEditingKnowledgeDraft(d => ({ ...d, tags: e.target.value }))} />
+            <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+              <Button size="small" variant="outlined" startIcon={<AttachFileIcon />}
+                onClick={() => knowledgeImageRef.current?.click()}>
+                {knowledgeImageFile ? 'Ganti Gambar' : 'Lampirkan Gambar'}
+              </Button>
+              {knowledgeImageFile && (
+                <>
+                  <Box component="span" sx={{ fontSize: 12, color: 'text.secondary' }}>{knowledgeImageFile.name}</Box>
+                  <Button size="small" color="error" onClick={() => setKnowledgeImageFile(null)}>Batal</Button>
+                </>
+              )}
+              <input ref={knowledgeImageRef} type="file" hidden accept="image/*"
+                onChange={e => setKnowledgeImageFile(e.target.files?.[0] || null)} />
+            </Stack>
           </Stack>
         </DialogContent>
         <DialogActions>
@@ -2813,7 +2830,7 @@ Bantu pelanggan sampai jelas, tertarik, dan siap order. Jika pelanggan sudah men
             onClick={async () => {
               if (!editingKnowledge) return;
               try {
-                await updateKnowledgeMut.mutateAsync({ id: editingKnowledge.id, ...editingKnowledgeDraft });
+                await updateKnowledgeMut.mutateAsync({ id: editingKnowledge.id, ...editingKnowledgeDraft, file: knowledgeImageFile });
                 setEditingKnowledge(null);
                 swalToast('FAQ diperbarui', 'success');
               } catch (error) {

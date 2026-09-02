@@ -1,12 +1,13 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   Box, Card, CardContent, Typography, Button, Stack, IconButton,
   Dialog, DialogTitle, DialogContent, DialogActions, TextField, CircularProgress,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import EditIcon from '@mui/icons-material/Edit';
-import TemplateIcon from '@mui/icons-material/TextSnippetOutlined';
+import AttachFileIcon from '@mui/icons-material/AttachFile';
 import DeleteIcon from '@mui/icons-material/Delete';
+import TemplateIcon from '@mui/icons-material/TextSnippetOutlined';
 import { useTemplates, useSaveTemplate, useDeleteTemplate } from '../hooks';
 import type { Template } from '../types';
 import { swalConfirm } from '../services/swal';
@@ -22,10 +23,12 @@ export default function TemplatePanel({ agentId }: { agentId: number }) {
   const del = useDeleteTemplate(agentId);
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<Partial<Template>>(EMPTY);
+  const [file, setFile] = useState<File | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const openNew = () => { setForm(EMPTY); setErrors({}); setOpen(true); };
-  const openEdit = (t: Template) => { setForm(t); setErrors({}); setOpen(true); };
+  const openNew = () => { setForm(EMPTY); setFile(null); setErrors({}); setOpen(true); };
+  const openEdit = (t: Template) => { setForm(t); setFile(null); setErrors({}); setOpen(true); };
   const validate = () => {
     const e: Record<string, string> = {};
     if (!form.title?.trim()) e.title = 'Wajib diisi';
@@ -35,12 +38,30 @@ export default function TemplatePanel({ agentId }: { agentId: number }) {
   };
   const submit = async () => {
     if (!validate()) return;
-    await save.mutateAsync(form);
+    await save.mutateAsync({ ...form, file });
     setOpen(false);
   };
   const remove = async (t: Template) => { if (await swalConfirm('Hapus template ini?')) del.mutate(t.id); };
 
   if (isLoading) return <Box sx={{ display: 'flex', justifyContent: 'center', mt: 8 }}><CircularProgress /></Box>;
+
+  const mediaUrl = (t: Template) => t.id ? `/api/agents/${agentId}/templates/${t.id}/media` : '';
+  const preview = (t: Template) => {
+    if (!t.media_type || !t.id) return null;
+    if (t.media_type === 'image') {
+      return (
+        <Box component="img" src={mediaUrl(t)} alt=""
+          sx={{ maxHeight: 60, maxWidth: 120, borderRadius: 1, display: 'block', mt: 0.5 }}
+          onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} />
+      );
+    }
+    return (
+      <Box component="span" sx={{ fontSize: 12, color: 'text.secondary', display: 'block', mt: 0.5 }}>
+        <AttachFileIcon sx={{ fontSize: 14, mr: 0.25, verticalAlign: 'middle' }} />
+        {t.file_name || t.media_type || 'Lampiran'}
+      </Box>
+    );
+  };
 
   return (
     <Box>
@@ -65,6 +86,7 @@ export default function TemplatePanel({ agentId }: { agentId: number }) {
                   <Box sx={{ minWidth: 0 }}>
                     <Typography sx={{ fontWeight: 600, mb: 0.5 }}>{t.title}</Typography>
                     <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: 'pre-wrap' }}>{t.body}</Typography>
+                    {preview(t)}
                   </Box>
                   <Stack direction="row" sx={{ alignItems: 'center', flexShrink: 0 }}>
                     <IconButton size="small" onClick={() => openEdit(t)}><EditIcon fontSize="small" /></IconButton>
@@ -88,6 +110,20 @@ export default function TemplatePanel({ agentId }: { agentId: number }) {
               <Typography variant="caption" color="text.secondary" sx={{ mb: 0.5, display: 'block' }}>Isi pesan</Typography>
               <WhatsAppEditor value={form.body ?? ''} onChange={v => { setForm({ ...form, body: v }); if (errors.body) setErrors(p => ({ ...p, body: '' })); }}
                 placeholder="Halo {nama}, terima kasih sudah order 🙏" rows={4} error={!!errors.body} helperText={errors.body || 'Tips: {nama} otomatis diganti nama kontak saat dikirim lewat Blast/Jadwal.'} />
+            </Box>
+            <Box>
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+                Lampiran (opsional) — dikirim bersama teks: {file ? file.name : (form.media_type ? (form.file_name || 'lampiran tersimpan') : 'belum ada')}
+              </Typography>
+              <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+                <Button size="small" variant="outlined" startIcon={<AttachFileIcon />}
+                  onClick={() => fileInputRef.current?.click()}>
+                  {file ? 'Ganti Lampiran' : 'Pilih File'}
+                </Button>
+                {file && <Button size="small" color="error" onClick={() => setFile(null)}>Hapus Pilihan</Button>}
+              </Stack>
+              <input ref={fileInputRef} type="file" hidden accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,"
+                onChange={e => setFile(e.target.files?.[0] || null)} />
             </Box>
           </Stack>
         </DialogContent>

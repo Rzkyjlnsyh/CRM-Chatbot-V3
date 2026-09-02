@@ -76,6 +76,8 @@ export interface ChatMsg {
   media_type: string; // "", image, document, audio, video, sticker
   file_name: string;
   mimetype: string;
+  media_path?: string;
+  media_fetch_status?: 'pending' | 'done' | 'failed' | string;
   image_analysis?: string;
   image_analysis_status?: 'completed' | 'failed' | string;
   image_analysis_model?: string;
@@ -87,6 +89,7 @@ export interface ChatMsg {
   reply_to?: string;
   reply_text?: string;
   revoked?: boolean;
+  delivery_status?: 'sent' | 'delivered' | 'read' | 'read_inferred' | 'played' | string;
   created_at: string;
 }
 
@@ -314,6 +317,10 @@ export interface Template {
   id: number;
   title: string;
   body: string;
+  media_type?: string;
+  media_path?: string;
+  file_name?: string;
+  mimetype?: string;
   sort_order: number;
 }
 

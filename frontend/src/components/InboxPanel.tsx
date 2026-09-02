@@ -30,7 +30,11 @@ import {
   useContacts, useConversation, useConversationBrief, useRefreshConversationBrief,
   useSendMessage, useSendMedia, postAgentTyping, useRevokeMessage, useResumeBot, useReanalyzeImage,
   useDeleteInboxConversation, useLoadOlderMessages, useMarkConversationRead, useLabels,
+  useInboxRealtime, useLinkPreview, type InboxLiveEvent,
 } from '../hooks';
+import { playInboxSound } from '../services/inboxSound';
+import api from '../services/api';
+import { useQueryClient } from '@tanstack/react-query';
 import TemplatePicker from './TemplatePicker';
 import { swalConfirm, swalToast } from '../services/swal';
 import type { ChatMsg, Contact, ConversationBrief } from '../types';
@@ -55,6 +59,26 @@ const WA = {
 
 function MediaView({ agentId, m, token }: { agentId: number; m: ChatMsg; token: string }) {
   const [zoom, setZoom] = useState<string | null>(null);
+  const qc = useQueryClient();
+  // Media riwayat WA (HistorySync): belum ada file → unduh on-demand (pola v4).
+  if (m.media_type && !m.from_human && !m.reply && !m.media_path && !m.media_fetch_status) {
+    return (
+      <Button
+        size="small"
+        variant="outlined"
+        onClick={async () => {
+          try {
+            await api.get(`/agents/${agentId}/history-media/${m.id}`, { responseType: 'blob' });
+          } catch {
+            // gagal → status failed di server; refetch tetap agar UI tahu
+          }
+          await qc.invalidateQueries({ queryKey: ['conversation', agentId, m.sender] });
+        }}
+      >
+        Unduh media riwayat
+      </Button>
+    );
+  }
   const url = `/api/agents/${agentId}/media/${m.id}?token=${token}`;
   if (m.media_type === 'image' || m.media_type === 'sticker') {
     return (
@@ -123,7 +147,7 @@ function avatarColor(seed: string) {
 /* ─── Bubble (memo) ─────────────────────────────────────────────────────── */
 
 const Bubble = memo(function Bubble({
-  side, tag, time, name, replyTo, onReply, children, isCS,
+  side, tag, time, name, replyTo, onReply, children, isCS, delivery,
 }: {
   side: 'left' | 'right';
   tag?: string;
@@ -133,6 +157,7 @@ const Bubble = memo(function Bubble({
   onReply?: () => void;
   children: ReactNode;
   isCS?: boolean;
+  delivery?: string;
 }) {
   const isLeft = side === 'left';
   return (
@@ -213,7 +238,7 @@ const Bubble = memo(function Bubble({
             )}
             {!isLeft && isCS && (
               <Box component="span" sx={{ fontSize: 12, color: WA.tick, lineHeight: 1, letterSpacing: -1 }}>
-                ✓✓
+                {delivery === 'read' || delivery === 'played' ? '✓✓' : '✓'}
               </Box>
             )}
             <IconButton
@@ -609,6 +634,7 @@ const MessageBlock = memo(function MessageBlock({
         <Bubble
           side="left"
           time={fmtTime(m.created_at)}
+          delivery={m.delivery_status}
           name={selectedName || sender}
           replyTo={resolveReply(m.reply_to)}
           onReply={() => onReply(m.wa_msg_id || String(m.id), mediaPreviewLabel(m))}
@@ -810,6 +836,29 @@ const ChatComposer = memo(function ChatComposer({
   const [text, setText] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [sending, setSending] = useState(false);
+  // Pratinjau tautan (pola v4): URL terakhir di teks → kartu preview sebelum kirim.
+  const linkPreview = useLinkPreview(agentId);
+  const [previewData, setPreviewData] = useState<{ title: string; description?: string; image?: string; url: string } | null>(null);
+  const lastUrl = useMemo(() => {
+    const m = text.match(/https?:\/\/[^\s]+/);
+    return m ? m[0] : '';
+  }, [text]);
+  useEffect(() => {
+    if (!lastUrl) {
+      setPreviewData(null);
+      return;
+    }
+    const t = setTimeout(async () => {
+      try {
+        const res = await linkPreview.mutateAsync(lastUrl);
+        setPreviewData(res.data ?? null);
+      } catch {
+        setPreviewData(null);
+      }
+    }, 700);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lastUrl]);
   const fileInput = useRef<HTMLInputElement>(null);
   const typingActive = useRef(false);
   const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -910,6 +959,24 @@ const ChatComposer = memo(function ChatComposer({
           </Box>
           <IconButton size="small" onClick={onClearReply}>
             <CloseIcon sx={{ fontSize: 18 }} />
+          </IconButton>
+        </Stack>
+      )}
+
+      {previewData && !file && (
+        <Stack direction="row" sx={{ mx: 1.25, mb: 0.5, p: 1, alignItems: 'center', gap: 1, bgcolor: WA.panel, borderRadius: 1 }}>
+          {previewData.image && (
+            <Box component="img" src={previewData.image} alt=""
+              sx={{ width: 44, height: 44, borderRadius: 1, objectFit: 'cover', flexShrink: 0 }} />
+          )}
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Typography noWrap sx={{ fontSize: 13, fontWeight: 600 }}>{previewData.title}</Typography>
+            {previewData.description && (
+              <Typography noWrap sx={{ fontSize: 12, color: WA.meta }}>{previewData.description}</Typography>
+            )}
+          </Box>
+          <IconButton size="small" onClick={() => setPreviewData(null)}>
+            <CloseIcon sx={{ fontSize: 16 }} />
           </IconButton>
         </Stack>
       )}
@@ -1068,6 +1135,22 @@ export default function InboxPanel({
   const [visionError, setVisionError] = useState('');
   const [contactInfoOpen, setContactInfoOpen] = useState(false);
   const [copyHint, setCopyHint] = useState('');
+  const qc = useQueryClient();
+  const [typingSender, setTypingSender] = useState<string | null>(null);
+  const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Realtime SSE (pola v4): invalidasi daftar & percakapan + suara + indikator mengetik.
+  const handleLiveEvent = useCallback((ev: InboxLiveEvent) => {
+    if (ev.kind === 'new_message' || ev.kind === 'read_state') {
+      void qc.invalidateQueries({ queryKey: ['contacts', agentId] });
+      void qc.invalidateQueries({ queryKey: ['conversation', agentId, ev.sender ?? sender] });
+      if (ev.kind === 'new_message' && ev.sender && ev.sender !== sender) playInboxSound();
+    } else if (ev.kind === 'typing') {
+      setTypingSender(ev.sender ?? null);
+      if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
+      typingTimerRef.current = setTimeout(() => setTypingSender(null), 4000);
+    }
+  }, [qc, agentId, sender]);
+  useInboxRealtime(agentId, handleLiveEvent);
   const bottomRef = useRef<HTMLDivElement>(null);
   const chatRef = useRef<HTMLDivElement>(null);
   const didFirstScroll = useRef(false);
@@ -1136,10 +1219,10 @@ export default function InboxPanel({
   const selectedName = selectedContact?.name;
 
   const headerSubtitle = useMemo(() => {
+    if (typingSender === sender) return 'sedang mengetik…';
     if (convoFetching) return 'memperbarui…';
-    if (selectedName) return `+${sender}`;
     return `+${sender}`;
-  }, [convoFetching, selectedName, sender]);
+  }, [convoFetching, selectedName, sender, typingSender]);
 
   const copyNumber = useCallback(async () => {
     if (!sender) return;
