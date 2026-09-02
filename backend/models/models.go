@@ -56,40 +56,40 @@ type Agent struct {
 }
 
 type ChatHistory struct {
-	ID                      uint       `gorm:"primaryKey" json:"id"`
-	AgentID                 uint       `gorm:"index;index:idx_chat_agent_wa_msg,priority:1" json:"agent_id"`
-	Sender                  string     `gorm:"index;size:32" json:"sender"`
-	Message                 string     `json:"message"`
-	Reply                   string     `json:"reply"`
-	FromHuman               bool       `gorm:"not null;default:false" json:"from_human"`
-	MediaType               string     `gorm:"size:16" json:"media_type"`
-	MediaPath               string     `json:"-"`
-	FileName                string     `json:"file_name"`
-	Mimetype                string     `json:"mimetype"`
-	ImageAnalysis           string     `gorm:"type:text" json:"image_analysis,omitempty"`
-	ImageAnalysisStatus     string     `gorm:"size:24;index" json:"image_analysis_status,omitempty"` // completed, failed
-	ImageAnalysisModel      string     `gorm:"size:120" json:"image_analysis_model,omitempty"`
-	ImageAnalysisConfidence float64    `json:"image_analysis_confidence,omitempty"`
-	ImageAnalysisAnswer     string     `gorm:"type:text" json:"image_analysis_answer,omitempty"`
-	ImageAnalysisProductID  uint       `gorm:"index" json:"image_analysis_product_id,omitempty"`
-	ImageAnalysisNeedsHuman bool       `gorm:"not null;default:false;index" json:"image_analysis_needs_human,omitempty"`
-	WAMsgID                 string     `gorm:"size:64;index:idx_chat_agent_wa_msg,priority:2" json:"wa_msg_id"`
-	ReplyTo                 string     `json:"reply_to"`
-	ReplyText               string     `gorm:"size:200" json:"reply_text"`
-	Revoked                 bool       `gorm:"default:false" json:"revoked"`
-	DeliveryStatus          string     `gorm:"size:24;index;default:sent" json:"delivery_status"` // sent, delivered, read_inferred, read, played, pending_retry, failed_send
-	SendError               string     `gorm:"type:text" json:"send_error,omitempty"`
-	RetryCount              int        `gorm:"not null;default:0" json:"retry_count"`
+	ID                      uint    `gorm:"primaryKey" json:"id"`
+	AgentID                 uint    `gorm:"index;index:idx_chat_agent_wa_msg,priority:1" json:"agent_id"`
+	Sender                  string  `gorm:"index;size:32" json:"sender"`
+	Message                 string  `json:"message"`
+	Reply                   string  `json:"reply"`
+	FromHuman               bool    `gorm:"not null;default:false" json:"from_human"`
+	MediaType               string  `gorm:"size:16" json:"media_type"`
+	MediaPath               string  `json:"-"`
+	FileName                string  `json:"file_name"`
+	Mimetype                string  `json:"mimetype"`
+	ImageAnalysis           string  `gorm:"type:text" json:"image_analysis,omitempty"`
+	ImageAnalysisStatus     string  `gorm:"size:24;index" json:"image_analysis_status,omitempty"` // completed, failed
+	ImageAnalysisModel      string  `gorm:"size:120" json:"image_analysis_model,omitempty"`
+	ImageAnalysisConfidence float64 `json:"image_analysis_confidence,omitempty"`
+	ImageAnalysisAnswer     string  `gorm:"type:text" json:"image_analysis_answer,omitempty"`
+	ImageAnalysisProductID  uint    `gorm:"index" json:"image_analysis_product_id,omitempty"`
+	ImageAnalysisNeedsHuman bool    `gorm:"not null;default:false;index" json:"image_analysis_needs_human,omitempty"`
+	WAMsgID                 string  `gorm:"size:64;index:idx_chat_agent_wa_msg,priority:2" json:"wa_msg_id"`
+	ReplyTo                 string  `json:"reply_to"`
+	ReplyText               string  `gorm:"size:200" json:"reply_text"`
+	Revoked                 bool    `gorm:"default:false" json:"revoked"`
+	DeliveryStatus          string  `gorm:"size:24;index;default:sent" json:"delivery_status"` // sent, delivered, read_inferred, read, played, pending_retry, failed_send
+	SendError               string  `gorm:"type:text" json:"send_error,omitempty"`
+	RetryCount              int     `gorm:"not null;default:0" json:"retry_count"`
 	// ReplySource membedakan asal balasan: "ai" (default), "human_device",
 	// "human_inbox", "history_sync" (import riwayat WA). Dipakai Learning agar
 	// riwayat impor TIDAK dihitung sebagai materi belajar.
 	ReplySource string `gorm:"size:24;default:ai" json:"reply_source,omitempty"`
 	// MediaMetadata = protobuf pesan riwayat (HistorySync) untuk unduh media
 	// on-demand; MediaFetchStatus = pending|done|failed.
-	MediaMetadata    []byte `gorm:"type:blob" json:"-"`
-	MediaFetchStatus string `gorm:"size:24" json:"media_fetch_status,omitempty"`
-	NextRetryAt             *time.Time `gorm:"index" json:"next_retry_at,omitempty"`
-	CreatedAt               time.Time  `json:"created_at"`
+	MediaMetadata    []byte     `gorm:"type:blob" json:"-"`
+	MediaFetchStatus string     `gorm:"size:24" json:"media_fetch_status,omitempty"`
+	NextRetryAt      *time.Time `gorm:"index" json:"next_retry_at,omitempty"`
+	CreatedAt        time.Time  `json:"created_at"`
 }
 
 type AITurn struct {
@@ -181,7 +181,11 @@ type Knowledge struct {
 	EmbeddingModel string `gorm:"size:80" json:"-"`
 	// Source = asal knowledge: manual, wizard, web, dokumen. SourceURL = URL halaman asal (untuk web).
 	// Dipakai mengelompokkan & menghapus knowledge per sumber (mis. hapus semua dari 1 website).
-	Source    string    `gorm:"size:16;default:manual;index" json:"source"`
+	Source string `gorm:"size:16;default:manual;index" json:"source"`
+	// ImagePath/ImageMime: gambar pendukung KB (pola v4) — ditampilkan di UI
+	// dan dilampirkan saat AI menjelaskan produk/FAQ bergambar.
+	ImagePath string    `gorm:"type:text" json:"image_path,omitempty"`
+	ImageMime string    `gorm:"size:64" json:"image_mime,omitempty"`
 	SourceURL string    `gorm:"type:text" json:"source_url"`
 	CharCount int       `gorm:"not null;default:0" json:"char_count"` // panjang Answer, untuk hitung kuota karakter
 	CreatedAt time.Time `json:"created_at"`

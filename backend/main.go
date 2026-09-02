@@ -158,6 +158,7 @@ func main() {
 			auth.POST("/knowledge/import", handlers.ImportKnowledge)
 			auth.PUT("/knowledge/:kid", handlers.UpdateKnowledge)
 			auth.DELETE("/knowledge/:kid", handlers.DeleteKnowledge)
+			auth.GET("/knowledge/:kid/image", handlers.ServeKnowledgeImage)
 
 			// Multi-agent (CS).
 			auth.GET("/agents", handlers.ListAgents)
@@ -252,6 +253,7 @@ func main() {
 			auth.POST("/agents/:id/templates", handlers.CreateTemplate)
 			auth.PUT("/agents/:id/templates/:tid", handlers.UpdateTemplate)
 			auth.DELETE("/agents/:id/templates/:tid", handlers.DeleteTemplate)
+			auth.GET("/agents/:id/templates/:tid/media", handlers.ServeTemplateMedia)
 			auth.GET("/agents/:id/crm/contacts", handlers.ListSavedContacts)
 			auth.POST("/agents/:id/crm/contacts", handlers.CreateSavedContact)
 			auth.PUT("/agents/:id/crm/contacts/:cid", handlers.UpdateSavedContact)

@@ -1,6 +1,9 @@
 package handlers
 
 import (
+	"log"
+	"net/http"
+	"os"
 	"strings"
 
 	"wa-assistant/backend/database"
@@ -9,6 +12,47 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
+// bindKnowledgeImage membaca file "image" dari form (max 8 MB) dan menyimpannya
+// via storeMedia; mengembalikan (path, mime, nama). Kosong bila tanpa file.
+func bindKnowledgeImage(c *gin.Context) (mediaPath, mime, name string) {
+	file, err := c.FormFile("image")
+	if err != nil || file == nil {
+		return "", "", ""
+	}
+	if file.Size > 8<<20 {
+		return "", "", ""
+	}
+	fh, err := file.Open()
+	if err != nil {
+		return "", "", ""
+	}
+	defer fh.Close()
+	data := make([]byte, file.Size)
+	if _, err := fh.Read(data); err != nil {
+		return "", "", ""
+	}
+	mime = file.Header.Get("Content-Type")
+	if mime == "" {
+		mime = "image/jpeg"
+	}
+	return storeMedia(currentAgentID(c), data, mime, file.Filename), mime, file.Filename
+}
+
+// ServeKnowledgeImage — GET /knowledge/:kid/image (+ /agents/:id/knowledge/:kid/image).
+func ServeKnowledgeImage(c *gin.Context) {
+	aid := currentAgentID(c)
+	if aid == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Agent tidak ditemukan"})
+		return
+	}
+	var k models.Knowledge
+	if database.DB.Where("agent_id = ?", aid).First(&k, c.Param("kid")).Error != nil || k.ImagePath == "" {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Gambar tidak ada"})
+		return
+	}
+	c.File(k.ImagePath)
+}
 
 func ChatHistory(c *gin.Context) {
 	var chats []models.ChatHistory
@@ -56,6 +100,37 @@ func CreateKnowledge(c *gin.Context) {
 	if !ok {
 		return
 	}
+	// Dukungan multipart: teks + gambar KB sekaligus (pola v4).
+	if strings.HasPrefix(c.GetHeader("Content-Type"), "multipart/form-data") {
+		question := strings.TrimSpace(c.PostForm("question"))
+		answer := strings.TrimSpace(c.PostForm("answer"))
+		if question == "" || answer == "" {
+			c.JSON(400, gin.H{"error": "Pertanyaan & jawaban wajib diisi"})
+			return
+		}
+		writer := newKnowledgeUpserter(aid)
+		merged := writer.findDuplicate(question, answer) != nil
+		k, _, err := writer.save(question, answer, c.PostForm("tags"), "manual", "")
+		if err != nil {
+			c.JSON(500, gin.H{"error": "FAQ belum bisa disimpan"})
+			return
+		}
+		if k.ID > 0 {
+			if mediaPath, mime, _ := bindKnowledgeImage(c); mediaPath != "" {
+				if err := database.DB.Model(&models.Knowledge{}).Where("id = ?", k.ID).
+					Updates(map[string]any{"image_path": mediaPath, "image_mime": mime}).Error; err != nil {
+					log.Printf("KB gambar gagal disimpan: %v", err)
+				}
+			}
+			services.IndexKnowledge(&k)
+		}
+		status := 201
+		if merged {
+			status = 200
+		}
+		c.JSON(status, gin.H{"data": k, "merged": merged})
+		return
+	}
 	var req struct {
 		Question string `json:"question"`
 		Answer   string `json:"answer"`
@@ -87,6 +162,31 @@ func UpdateKnowledge(c *gin.Context) {
 	var k models.Knowledge
 	if database.DB.Where("agent_id = ?", currentAgentID(c)).First(&k, c.Param("kid")).Error != nil {
 		c.JSON(404, gin.H{"error": "Not found"})
+		return
+	}
+	// Dukungan multipart: ubah teks + ganti gambar KB sekaligus (pola v4).
+	if strings.HasPrefix(c.GetHeader("Content-Type"), "multipart/form-data") {
+		question := strings.TrimSpace(c.PostForm("question"))
+		answer := strings.TrimSpace(c.PostForm("answer"))
+		if question == "" || answer == "" {
+			c.JSON(400, gin.H{"error": "Pertanyaan & jawaban wajib diisi"})
+			return
+		}
+		k.Question = question
+		k.Answer = answer
+		k.Tags = c.PostForm("tags")
+		if mediaPath, mime, _ := bindKnowledgeImage(c); mediaPath != "" {
+			if k.ImagePath != "" {
+				_ = os.Remove(k.ImagePath)
+			}
+			k.ImagePath, k.ImageMime = mediaPath, mime
+		}
+		if err := database.DB.Save(&k).Error; err != nil {
+			c.JSON(500, gin.H{"error": "FAQ belum bisa diperbarui"})
+			return
+		}
+		services.IndexKnowledge(&k)
+		c.JSON(200, gin.H{"data": k})
 		return
 	}
 	var req struct {

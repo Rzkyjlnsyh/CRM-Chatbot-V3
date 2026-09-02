@@ -79,7 +79,7 @@ func processLearningRun(runID, agentID uint, startDate, endDate *time.Time) {
 		// terakhir supaya user tahu kenapa gagal & cara memperbaikinya.
 		var last90 int64
 		database.DB.Model(&models.ChatHistory{}).
-			Where("agent_id = ? AND reply <> '' AND from_human = ? AND created_at >= ? AND (reply_source IS NULL OR reply_source <> 'history_sync')",
+			Where("agent_id = ? AND reply <> '' AND from_human = ? AND created_at >= ?",
 				agentID, true, time.Now().AddDate(0, 0, -90)).Count(&last90)
 		msg := "Tidak ada balasan CS manusia yang tercatat dari WhatsApp terhubung dalam rentang ini. Learning mempelajari cara CS MEMBALAS (bukan chat masuk atau balasan AI). Balas beberapa pelanggan lewat dashboard WhatsApp terhubung, lalu jalankan lagi."
 		if last90 > 0 {
@@ -296,7 +296,9 @@ func loadLabeledHumanChats(agentID uint, labelID string, startDate, endDate *tim
 		return nil
 	}
 	var chats []models.ChatHistory
-	q := database.DB.Where("agent_id = ? AND from_human = ? AND sender IN ? AND (reply_source IS NULL OR reply_source <> 'history_sync')", agentID, true, senders)
+	// Riwayat impor (reply_source='history_sync') IKUT sebagai materi — balasan
+	// CS asli yang berharga; dedup wa_msg_id & pola ternormalisasi mencegah dobel.
+	q := database.DB.Where("agent_id = ? AND from_human = ? AND sender IN ?", agentID, true, senders)
 	if startDate != nil {
 		q = q.Where("created_at >= ?", *startDate)
 	}
@@ -328,10 +330,11 @@ func autoApplyPatterns(agentID, runID uint, cfg models.LearningConfig) int {
 	return applied
 }
 
-// loadHumanCSChats mengambil chat di mana CS manusia yg membalas (via device/WA Web).
+// loadHumanCSChats mengambil chat di mana CS manusia yg membalas (via device/WA Web
+// maupun riwayat impor history_sync — keduanya balasan CS asli).
 func loadHumanCSChats(agentID uint, startDate, endDate *time.Time) ([]models.ChatHistory, error) {
 	var chats []models.ChatHistory
-	q := database.DB.Where("agent_id = ? AND reply <> '' AND from_human = ? AND (reply_source IS NULL OR reply_source <> 'history_sync')", agentID, true)
+	q := database.DB.Where("agent_id = ? AND reply <> '' AND from_human = ?", agentID, true)
 	if startDate != nil {
 		q = q.Where("created_at >= ?", *startDate)
 	}

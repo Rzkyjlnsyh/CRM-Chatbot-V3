@@ -528,6 +528,14 @@ KEBIJAKAN PERCAKAPAN CUSTOMER SERVICE:
 		return ChatResult{Reply: "Maaf kak, boleh diulang pertanyaannya?", Model: p.Short, Trace: trace}, nil
 	}
 	reply = sanitizeCustomerFacingReply(reply)
+	// Fase 4 — policy panjang jawaban per intent (pola v4): balasan melebihi
+	// budget dipadatkan SEKALI (suhu rendah) sebelum grounding.
+	responsePolicy := selectAIResponsePolicy(userMsg, retrievalQuery, productContext, len(relevant))
+	if responseNeedsCondensing(reply, responsePolicy) {
+		if concise, ok := retryConciseReply(p, messages, responsePolicy); ok {
+			reply = concise
+		}
+	}
 
 	// Grounding v2: overlap token + validasi angka (normalized) terhadap knowledge/produk.
 	// Pertanyaan faktual yang gagal → retry ketat sekali → jawaban aman.

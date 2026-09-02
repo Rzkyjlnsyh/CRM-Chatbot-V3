@@ -11,8 +11,9 @@ import (
 	"gorm.io/gorm"
 )
 
-// TestLearningIgnoresHistorySync — riwayat impor TIDAK boleh jadi materi belajar.
-func TestLearningIgnoresHistorySync(t *testing.T) {
+// TestLearningIncludesHistorySync — riwayat impor = balasan CS asli, IKUT jadi
+// materi belajar (dedup wa_msg_id & pola ternormalisasi mencegah dobel).
+func TestLearningIncludesHistorySync(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open("file:learn-hist-fork?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("db: %v", err)
@@ -22,10 +23,10 @@ func TestLearningIgnoresHistorySync(t *testing.T) {
 	}
 	database.DB = db
 
-	now := time.Now().Add(-2 * time.Hour)
-	// Balasan CS ASLI (live) — harus masuk materi belajar.
+	now := time.Now().Add(-30 * time.Minute)
+	// Balasan CS ASLI (live).
 	live := models.ChatHistory{AgentID: 1, Sender: "6281", Reply: "Baik kak, kami proses ya", FromHuman: true, CreatedAt: now}
-	// Balasan impor riwayat — HARUS diabaikan.
+	// Balasan impor riwayat — JUGA materi belajar.
 	hist := models.ChatHistory{AgentID: 1, Sender: "6281", Reply: "Baik kak, kami proses ya (lama)", FromHuman: true, ReplySource: "history_sync", CreatedAt: now.Add(-5 * time.Minute)}
 	if err := db.Create(&live).Error; err != nil {
 		t.Fatalf("seed live: %v", err)
@@ -40,10 +41,7 @@ func TestLearningIgnoresHistorySync(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if len(chats) != 1 {
-		t.Fatalf("harusnya hanya 1 chat live (dapat %d) — history_sync bocor ke learning!", len(chats))
-	}
-	if chats[0].ReplySource == "history_sync" {
-		t.Fatal("baris history_sync lolos filter learning")
+	if len(chats) != 2 {
+		t.Fatalf("riwayat impor harus ikut materi belajar: dapat %d (harus 2)", len(chats))
 	}
 }
