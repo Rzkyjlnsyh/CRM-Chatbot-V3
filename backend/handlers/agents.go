@@ -189,15 +189,32 @@ func OnWAOwnMessage(agentID uint, recipient types.JID, in services.IncomingMessa
 	if text == "" {
 		return
 	}
+	// Dedup: pesan manual dengan wa_msg_id yang sudah tercatat TIDAK dicatat dua kali.
+	if in.WAMsgID != "" {
+		var existing models.ChatHistory
+		err := database.DB.Where("agent_id = ? AND wa_msg_id = ?", agentID, in.WAMsgID).First(&existing).Error
+		if err == nil {
+			// Update baris lama (mis. media datang belakangan) — tanpa insert baru.
+			if existing.MediaType == "" && in.MediaType != "" {
+				database.DB.Model(&existing).Updates(map[string]any{
+					"media_type": in.MediaType, "file_name": in.FileName, "mimetype": in.Mimetype,
+				})
+			}
+			return
+		}
+	}
 	// Pasang jeda sementara sebelum menguras pesan customer yang masih di debounce,
 	// sehingga pesan itu tetap tercatat tetapi tidak sempat memicu jawaban AI baru.
 	pauseAIForManualReply(agentID, num)
 	flushText(agentID, recipient, true)
-	now := time.Now()
+	createdAt := time.Now()
+	if !in.Timestamp.IsZero() {
+		createdAt = in.Timestamp // timestamp asli WhatsApp — urutan chat akurat
+	}
 	if err := database.DB.Create(&models.ChatHistory{
 		AgentID: agentID, Sender: num, Reply: text, FromHuman: true,
 		MediaType: in.MediaType, FileName: in.FileName, Mimetype: in.Mimetype,
-		WAMsgID: in.WAMsgID, DeliveryStatus: "sent", CreatedAt: now,
+		WAMsgID: in.WAMsgID, DeliveryStatus: "sent", CreatedAt: createdAt,
 	}).Error; err != nil {
 		log.Printf("Gagal mencatat balasan manual perangkat (agent %d, %s): %v", agentID, num, err)
 	}

@@ -39,12 +39,12 @@ type Agent struct {
 	SheetSyncEnabled     bool   `gorm:"not null;default:false" json:"sheet_sync_enabled"`
 
 	// Cek ongkir realtime via Mengantar API + RajaOngkir (fallback).
-	OriginCityID               int    `gorm:"default:0" json:"origin_city_id"`
-	OriginCityName             string `gorm:"size:100" json:"origin_city_name"`
-	DefaultWeightGram          int    `gorm:"default:1000" json:"default_weight_gram"`
-	EnabledCouriers            string `gorm:"size:100;default:'JNE,JT'" json:"enabled_couriers"`
-	MengantarOriginAutofillID  string `gorm:"size:30" json:"mengantar_origin_autofill_id"`  // PICKUP_AUTOFILL dari Mengantar
-	MengantarOriginAddressID   string `gorm:"size:30" json:"mengantar_origin_address_id"`   // _id saved address Mengantar
+	OriginCityID              int    `gorm:"default:0" json:"origin_city_id"`
+	OriginCityName            string `gorm:"size:100" json:"origin_city_name"`
+	DefaultWeightGram         int    `gorm:"default:1000" json:"default_weight_gram"`
+	EnabledCouriers           string `gorm:"size:100;default:'JNE,JT'" json:"enabled_couriers"`
+	MengantarOriginAutofillID string `gorm:"size:30" json:"mengantar_origin_autofill_id"` // PICKUP_AUTOFILL dari Mengantar
+	MengantarOriginAddressID  string `gorm:"size:30" json:"mengantar_origin_address_id"`  // _id saved address Mengantar
 
 	// REST API publik + Webhook (per-nomor). APIKey & WebhookSecret tidak pernah
 	// diserialkan ke JSON (json:"-") — hanya ditampilkan tersamar / sekali saat dibuat.
@@ -57,7 +57,7 @@ type Agent struct {
 
 type ChatHistory struct {
 	ID                      uint       `gorm:"primaryKey" json:"id"`
-	AgentID                 uint       `gorm:"index" json:"agent_id"`
+	AgentID                 uint       `gorm:"index;index:idx_chat_agent_wa_msg,priority:1" json:"agent_id"`
 	Sender                  string     `gorm:"index;size:32" json:"sender"`
 	Message                 string     `json:"message"`
 	Reply                   string     `json:"reply"`
@@ -73,11 +73,11 @@ type ChatHistory struct {
 	ImageAnalysisAnswer     string     `gorm:"type:text" json:"image_analysis_answer,omitempty"`
 	ImageAnalysisProductID  uint       `gorm:"index" json:"image_analysis_product_id,omitempty"`
 	ImageAnalysisNeedsHuman bool       `gorm:"not null;default:false;index" json:"image_analysis_needs_human,omitempty"`
-	WAMsgID                 string     `gorm:"size:64" json:"wa_msg_id"`
+	WAMsgID                 string     `gorm:"size:64;index:idx_chat_agent_wa_msg,priority:2" json:"wa_msg_id"`
 	ReplyTo                 string     `json:"reply_to"`
 	ReplyText               string     `gorm:"size:200" json:"reply_text"`
 	Revoked                 bool       `gorm:"default:false" json:"revoked"`
-	DeliveryStatus          string     `gorm:"size:24;index;default:sent" json:"delivery_status"` // sent, pending_retry, failed_send
+	DeliveryStatus          string     `gorm:"size:24;index;default:sent" json:"delivery_status"` // sent, delivered, read_inferred, read, played, pending_retry, failed_send
 	SendError               string     `gorm:"type:text" json:"send_error,omitempty"`
 	RetryCount              int        `gorm:"not null;default:0" json:"retry_count"`
 	NextRetryAt             *time.Time `gorm:"index" json:"next_retry_at,omitempty"`
@@ -85,29 +85,29 @@ type ChatHistory struct {
 }
 
 type AITurn struct {
-	ID                 uint      `gorm:"primaryKey" json:"id"`
-	AgentID            uint      `gorm:"index;not null" json:"agent_id"`
-	Sender             string    `gorm:"index;size:32" json:"sender"`
-	UserMessage        string    `gorm:"type:text" json:"user_message"`
-	AIReply            string    `gorm:"type:text" json:"ai_reply"`
-	Model              string    `gorm:"size:80" json:"model"`
-	PromptVersion      string    `gorm:"size:40;default:'legacy';index" json:"prompt_version"`
-	KnowledgeUsedCount int       `json:"knowledge_used_count"`
-	KnowledgeIDs       string    `gorm:"size:255" json:"knowledge_ids"` // "12,45,90"
-	TopSimilarity      float64   `json:"top_similarity"`               // 0..1, 0 bila keyword-only
-	AnswerOverlap      float64   `json:"answer_overlap"`               // 0..1 overlap jawaban vs knowledge
-	ProductUsedCount   int       `json:"product_used_count"`
-	ProductIDs         string    `gorm:"size:255" json:"product_ids"`
-	RetrievalMode      string    `gorm:"size:24;index" json:"retrieval_mode"` // none|keyword|semantic|hybrid
+	ID                 uint    `gorm:"primaryKey" json:"id"`
+	AgentID            uint    `gorm:"index;not null" json:"agent_id"`
+	Sender             string  `gorm:"index;size:32" json:"sender"`
+	UserMessage        string  `gorm:"type:text" json:"user_message"`
+	AIReply            string  `gorm:"type:text" json:"ai_reply"`
+	Model              string  `gorm:"size:80" json:"model"`
+	PromptVersion      string  `gorm:"size:40;default:'legacy';index" json:"prompt_version"`
+	KnowledgeUsedCount int     `json:"knowledge_used_count"`
+	KnowledgeIDs       string  `gorm:"size:255" json:"knowledge_ids"` // "12,45,90"
+	TopSimilarity      float64 `json:"top_similarity"`                // 0..1, 0 bila keyword-only
+	AnswerOverlap      float64 `json:"answer_overlap"`                // 0..1 overlap jawaban vs knowledge
+	ProductUsedCount   int     `json:"product_used_count"`
+	ProductIDs         string  `gorm:"size:255" json:"product_ids"`
+	RetrievalMode      string  `gorm:"size:24;index" json:"retrieval_mode"` // none|keyword|semantic|hybrid
 	// RetrievalQuery = query efektif ke knowledge (bukan selalu sama dengan user_message).
-	RetrievalQuery    string `gorm:"type:text" json:"retrieval_query"`
-	GroundingRetried  bool   `gorm:"not null;default:false" json:"grounding_retried"`
-	GroundingFallback bool   `gorm:"not null;default:false;index" json:"grounding_fallback"`
-	UsedShippingTool   bool      `gorm:"not null;default:false;index" json:"used_shipping_tool"`
-	Escalated          bool      `gorm:"not null;default:false;index" json:"escalated"`
-	Error              string    `gorm:"type:text" json:"error"`
-	LatencyMs          int64     `json:"latency_ms"`
-	CreatedAt          time.Time `gorm:"index" json:"created_at"`
+	RetrievalQuery    string    `gorm:"type:text" json:"retrieval_query"`
+	GroundingRetried  bool      `gorm:"not null;default:false" json:"grounding_retried"`
+	GroundingFallback bool      `gorm:"not null;default:false;index" json:"grounding_fallback"`
+	UsedShippingTool  bool      `gorm:"not null;default:false;index" json:"used_shipping_tool"`
+	Escalated         bool      `gorm:"not null;default:false;index" json:"escalated"`
+	Error             string    `gorm:"type:text" json:"error"`
+	LatencyMs         int64     `json:"latency_ms"`
+	CreatedAt         time.Time `gorm:"index" json:"created_at"`
 }
 
 func (AITurn) TableName() string { return "ai_turns" }

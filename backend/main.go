@@ -60,6 +60,7 @@ func main() {
 
 	// Sambungkan ulang semua agent yang sudah ter-link.
 	services.Go("StartAgents", handlers.StartAgents)
+	handlers.CleanupBroadcastJunk() // hapus thread sistem @broadcast/@newsletter yang bocor
 	services.StartReconnectWatchdogCtx(appCtx, 90*time.Second)
 
 	// Lanjutkan broadcast yang sempat terhenti saat server mati; tandai jadwal yang nyangkut.

@@ -44,6 +44,7 @@ type IncomingMessage struct {
 	SenderJID types.JID // pengirim asli yang dipakai server WhatsApp
 	ReplyTo   string    // ID pesan yg di-reply (dari ContextInfo)
 	PushName  string    // nama profil pengirim (dari WA), untuk disimpan ke Contact
+	Timestamp time.Time // timestamp asli WA (dipakai pesan manual perangkat)
 }
 
 // MessageHandler dipanggil tiap pesan masuk, membawa ID agent (CS) penerima.
@@ -85,6 +86,7 @@ type waInstance struct {
 	labelSyncMu    sync.Mutex
 	agentID        uint
 	client         *whatsmeow.Client
+	sentBySystem   map[string]time.Time // wa_msg_id → waktu kirim (dedup echo pesan sendiri)
 	qrCode         string
 	qrExpiry       time.Time // kapan kode QR saat ini akan diputar whatsmeow (untuk countdown akurat)
 	status         string    // "disconnected", "qr", "connecting", "connected", "expired", "pairing", "pair_error"
@@ -184,7 +186,7 @@ func WA(agentID uint) *waInstance {
 	if w, ok := instances[agentID]; ok {
 		return w
 	}
-	w := &waInstance{agentID: agentID, status: "disconnected"}
+	w := &waInstance{agentID: agentID, status: "disconnected", sentBySystem: make(map[string]time.Time)}
 	instances[agentID] = w
 	return w
 }
@@ -500,12 +502,24 @@ func (w *waInstance) handleEvent(evt interface{}) {
 
 	case *events.Message:
 		// Pesan manual dari HP/perangkat tertaut lain dicatat sebagai takeover manusia.
-		// Event kiriman service sendiri tidak memiliki DeviceSentMeta dan tetap dilewati.
+		// Echo kiriman service SENDIRI tidak punya DeviceSentMeta — disaring lewat cache
+		// sentBySystem + pattern broadcast/newsletter supaya tidak tercatat dobel.
 		if v.Info.IsFromMe {
-			if v.Info.DeviceSentMeta != nil && onOwnMessage != nil && !v.Info.IsGroup {
+			if v.Info.IsGroup {
+				return
+			}
+			msgID := string(v.Info.ID)
+			if w.isSystemSent(msgID) {
+				return // echo pesan yang dikirim sistem sendiri — bukan balasan manusia
+			}
+			if strings.Contains(v.Info.Chat.User, "@broadcast") || strings.Contains(v.Info.Chat.User, "@newsletter") {
+				return
+			}
+			if onOwnMessage != nil {
 				in, ok := w.extractIncoming(v)
 				if ok {
-					in.WAMsgID = string(v.Info.ID)
+					in.WAMsgID = msgID
+					in.Timestamp = v.Info.Timestamp
 					recipient := v.Info.Chat
 					if recipient.Server == types.HiddenUserServer && !v.Info.RecipientAlt.IsEmpty() {
 						recipient = v.Info.RecipientAlt
@@ -1517,7 +1531,7 @@ func (w *waInstance) SendImage(toNumber, caption, mimetype string, data []byte) 
 	if err != nil {
 		return fmt.Errorf("gagal upload gambar: %w", err)
 	}
-	_, err = client.SendMessage(ctx, types.NewJID(toNumber, types.DefaultUserServer), &waProto.Message{
+	resp, err := client.SendMessage(ctx, types.NewJID(toNumber, types.DefaultUserServer), &waProto.Message{
 		ImageMessage: &waProto.ImageMessage{
 			Caption:       proto.String(caption),
 			Mimetype:      proto.String(mimetype),
@@ -1529,7 +1543,7 @@ func (w *waInstance) SendImage(toNumber, caption, mimetype string, data []byte) 
 			FileLength:    proto.Uint64(up.FileLength),
 		},
 	})
-	return err
+	return markSent(w, resp, err)
 }
 
 // SendDocument mengunggah & mengirim file/dokumen ke nomor (caption opsional).
@@ -1545,7 +1559,7 @@ func (w *waInstance) SendDocument(toNumber, fileName, mimetype, caption string, 
 	if err != nil {
 		return fmt.Errorf("gagal upload dokumen: %w", err)
 	}
-	_, err = client.SendMessage(ctx, types.NewJID(toNumber, types.DefaultUserServer), &waProto.Message{
+	resp, err := client.SendMessage(ctx, types.NewJID(toNumber, types.DefaultUserServer), &waProto.Message{
 		DocumentMessage: &waProto.DocumentMessage{
 			FileName:      proto.String(fileName),
 			Title:         proto.String(fileName),
@@ -1559,7 +1573,7 @@ func (w *waInstance) SendDocument(toNumber, fileName, mimetype, caption string, 
 			FileLength:    proto.Uint64(up.FileLength),
 		},
 	})
-	return err
+	return markSent(w, resp, err)
 }
 
 // SendVideo mengunggah & mengirim video ke nomor (caption opsional).
@@ -1576,7 +1590,7 @@ func (w *waInstance) SendVideo(toNumber, caption, mimetype string, data []byte) 
 	if err != nil {
 		return fmt.Errorf("gagal upload video: %w", err)
 	}
-	_, err = client.SendMessage(ctx, types.NewJID(toNumber, types.DefaultUserServer), &waProto.Message{
+	resp, err := client.SendMessage(ctx, types.NewJID(toNumber, types.DefaultUserServer), &waProto.Message{
 		VideoMessage: &waProto.VideoMessage{
 			Caption:       proto.String(caption),
 			Mimetype:      proto.String(mimetype),
@@ -1588,7 +1602,7 @@ func (w *waInstance) SendVideo(toNumber, caption, mimetype string, data []byte) 
 			FileLength:    proto.Uint64(up.FileLength),
 		},
 	})
-	return err
+	return markSent(w, resp, err)
 }
 
 // PreparedMedia menyimpan hasil upload media SEKALI agar bisa dikirim ke banyak penerima
@@ -1667,8 +1681,8 @@ func (w *waInstance) sendPreparedMediaTo(to types.JID, caption string, pm *Prepa
 			FileEncSHA256: up.FileEncSHA256, FileSHA256: up.FileSHA256, FileLength: proto.Uint64(up.FileLength),
 		}}
 	}
-	_, err := client.SendMessage(context.Background(), to, msg)
-	return err
+	resp, err := client.SendMessage(context.Background(), to, msg)
+	return markSent(w, resp, err)
 }
 
 // Suspend memutus socket WA tanpa menghapus sesi (device tetap tersimpan di store).
@@ -1684,6 +1698,46 @@ func (w *waInstance) Suspend() {
 	w.status = "disconnected"
 }
 
+// sentBySystemCacheTTL = berapa lama wa_msg_id kiriman sistem diingat.
+const sentBySystemCacheTTL = 30 * time.Minute
+
+// markSystemSent mencatat bahwa pesan ini dikirim oleh sistem (bukan manusia dari HP),
+// supaya echo-nya di event Message tidak dicatat sebagai balasan manual.
+func (w *waInstance) markSystemSent(msgID types.MessageID) {
+	if len(msgID) == 0 {
+		return
+	}
+	w.mu.Lock()
+	w.sentBySystem[string(msgID)] = time.Now()
+	// Bersihkan entri kadaluarsa (ringan — map kecil).
+	if len(w.sentBySystem) > 500 {
+		cut := time.Now().Add(-sentBySystemCacheTTL)
+		for k, t := range w.sentBySystem {
+			if t.Before(cut) {
+				delete(w.sentBySystem, k)
+			}
+		}
+	}
+	w.mu.Unlock()
+}
+
+// isSystemSent mengecek apakah echo pesan ini berasal dari kiriman sistem.
+func (w *waInstance) isSystemSent(msgID string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	t, ok := w.sentBySystem[msgID]
+	return ok && time.Since(t) < sentBySystemCacheTTL
+}
+
+// markSent mencatat kiriman sistem (dedup echo) lalu meneruskan err.
+func markSent(w *waInstance, resp whatsmeow.SendResponse, err error) error {
+	if err == nil {
+		w.markSystemSent(resp.ID)
+	}
+	return err
+}
+
+// SendMessage = kirim pesan teks (dipakai balasan dari Inbox/API).
 func (w *waInstance) SendMessage(to types.JID, message string, replyToID ...string) error {
 	return w.sendMessageWithDelay(to, message, humanDelay(message), replyToID...)
 }
@@ -1800,8 +1854,8 @@ func (w *waInstance) sendMessageWithDelay(to types.JID, message string, delay ti
 			},
 		}
 	}
-	_, err := client.SendMessage(ctx, to, msg)
-	return err
+	resp, err := client.SendMessage(ctx, to, msg)
+	return markSent(w, resp, err)
 }
 
 // SendTextAndGetID mengirim teks dan mengembalikan ID pesan WhatsApp (untuk revoke).
@@ -1822,6 +1876,7 @@ func (w *waInstance) SendTextAndGetID(toNumber, message string) (string, error) 
 	if err != nil {
 		return "", err
 	}
+	w.markSystemSent(resp.ID)
 	return resp.ID, nil
 }
 
@@ -1865,8 +1920,8 @@ func (w *waInstance) PostStatus(text, mimetype string, media []byte) error {
 		}
 		msg = &waProto.Message{ExtendedTextMessage: &waProto.ExtendedTextMessage{Text: proto.String(text)}}
 	}
-	_, err := client.SendMessage(ctx, types.StatusBroadcastJID, msg)
-	return err
+	resp, err := client.SendMessage(ctx, types.StatusBroadcastJID, msg)
+	return markSent(w, resp, err)
 }
 
 // SendContact mengirim kartu kontak (vCard) — dipakai broadcast "simpan kontak kami".
@@ -1890,8 +1945,8 @@ func (w *waInstance) SendContact(toNumber, text, displayName, number string) err
 			Vcard:       proto.String(buildVCard(displayName, number)),
 		}
 	}
-	_, err := client.SendMessage(ctx, jid, msg)
-	return err
+	resp, err := client.SendMessage(ctx, jid, msg)
+	return markSent(w, resp, err)
 }
 
 // buildVCard menyusun vCard 3.0 minimal yang dikenali WhatsApp.
