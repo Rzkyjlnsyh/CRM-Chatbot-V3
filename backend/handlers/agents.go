@@ -1428,16 +1428,37 @@ func ResumeHandoff(c *gin.Context) {
 }
 
 // OnDeviceLinked menyimpan device JID & nomor saat agent berhasil login via QR.
+// Bila nomor WA yang terhubung BERBEDA dari sebelumnya → state Inbox akun lama
+// direset otomatis (chat lama tidak bercampur dengan nomor baru).
 func OnDeviceLinked(agentID uint, jid, number string) {
 	var a models.Agent
 	if database.DB.First(&a, agentID).Error != nil {
 		return
 	}
+	currentNumber := normalizedWhatsAppAccount(number)
+	previousNumber := normalizedWhatsAppAccount(a.InboxOwnerNumber)
+	if previousNumber == "" {
+		previousNumber = normalizedWhatsAppAccount(a.Number)
+	}
+	changed := whatsappAccountChanged(previousNumber, currentNumber)
+
 	a.DeviceJID = jid
 	a.Number = number
+	if changed {
+		if resetResult, err := resetAgentInboxData(agentID); err != nil {
+			log.Printf("Gagal membersihkan Inbox agent %d saat berganti nomor %s -> %s: %v", agentID, previousNumber, currentNumber, err)
+		} else {
+			log.Printf("Inbox agent %d direset karena nomor berganti %s -> %s (%d chat, %d media)",
+				agentID, previousNumber, currentNumber, resetResult.DeletedChats, resetResult.DeletedMedia)
+			publishInboxEvent(agentID, "", "reset")
+		}
+	}
 	if err := database.DB.Save(&a).Error; err != nil {
 		log.Printf("Gagal menyimpan device agent %d: %v", agentID, err)
 		return
+	}
+	if changed {
+		_ = database.DB.Model(&a).Update("inbox_owner_number", currentNumber).Error
 	}
 	log.Printf("Agent %d ter-link ke nomor %s", agentID, number)
 }

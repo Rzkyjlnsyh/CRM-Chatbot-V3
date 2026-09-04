@@ -333,6 +333,7 @@ func main() {
 
 			auth.GET("/agents/:id/history-sync/status", handlers.GetHistorySyncStatus)
 			auth.GET("/agents/:id/inbox/events", handlers.InboxEvents)
+			auth.POST("/agents/:id/inbox/reset", handlers.RequireTenantAdmin(), handlers.ResetAgentInbox)
 			auth.GET("/agents/:id/inbox/unread-summary", handlers.InboxUnreadSummary)
 			auth.GET("/agents/:id/link-preview", handlers.LinkPreview)
 			auth.GET("/agents/:id/profile-picture", handlers.ServeProfilePicture)
