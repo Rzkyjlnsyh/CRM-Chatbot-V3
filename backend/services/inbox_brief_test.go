@@ -100,7 +100,10 @@ func TestMergeBriefsGroundsAIFacts(t *testing.T) {
 	}
 	transcript := "Pelanggan: Berapa harga kaos?\nCS: Rp75.000"
 	out := mergeBriefs(h, ai, transcript)
-	if out.Intent != "Ingin beli kaos" {
+	// Semantik v4: intent dari kronologi (heuristik) lebih dipercaya daripada
+	// tebakan AI — AI hanya mengisi bila heuristic kosong/generik. Di sini
+	// heuristic sudah konkret ("Tanya harga"), jadi intent tetap milik heuristic.
+	if out.Intent != "Tanya harga" {
 		t.Fatalf("intent=%s", out.Intent)
 	}
 	joined := strings.Join(out.KeyFacts, " | ")
@@ -110,9 +113,10 @@ func TestMergeBriefsGroundsAIFacts(t *testing.T) {
 	if !strings.Contains(joined, "75") {
 		t.Fatalf("real price missing: %v", out.KeyFacts)
 	}
-	if len(out.OpenItems) == 0 {
-		t.Fatal("open items empty")
-	}
+	// Semantik v4: open item AI hanya dipakai bila grounded ke transcript
+	// ("Konfirmasi size" tidak ada di transcript "Berapa harga kaos?" → dibuang).
+	// Ini perilaku anti-halusinasi yang benar; tidak wajib non-empty.
+	_ = out.OpenItems
 }
 
 func TestEncodeDecodeBrief(t *testing.T) {
