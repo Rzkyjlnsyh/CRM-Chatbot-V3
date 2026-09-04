@@ -417,20 +417,35 @@ func generateAIFollowUpMsg(agentID uint, number, name string, step models.Follow
 // ---------------------------------------------------------------------------
 
 // normalizeFollowUpSteps memvalidasi dan menormalisasi slice steps sebelum disimpan.
-// Memastikan: delay >= 0, message tidak kosong (atau ai_generated harus true),
-// step_order berurutan, dan total langkah tidak melebihi batas.
+// Pola v4: trim pesan & instruksi, instruksi AI mengisi Message bila AiGenerated,
+// delay tak boleh negatif, urutan waktu harus menaik, langkah kosong dibuang.
 func normalizeFollowUpSteps(steps []followUpStepReq) ([]followUpStepReq, error) {
 	const maxSteps = 20
-	var normalized []followUpStepReq
-	for _, s := range steps {
-		// Skip step yang tidak punya pesan maupun instruksi AI.
-		if strings.TrimSpace(s.Message) == "" && !s.AiGenerated {
+	normalized := make([]followUpStepReq, 0, len(steps))
+	previousDelay := -1
+	for _, raw := range steps {
+		step := raw
+		step.Message = strings.TrimSpace(step.Message)
+		step.AiInstruction = strings.TrimSpace(step.AiInstruction)
+		if step.AiGenerated {
+			if step.AiInstruction == "" {
+				step.AiInstruction = step.Message
+			}
+			step.Message = step.AiInstruction
+		} else {
+			step.AiInstruction = ""
+		}
+		if step.Message == "" {
 			continue
 		}
-		if s.DelayHours < 0 {
-			s.DelayHours = 0
+		if step.DelayHours < 0 {
+			return nil, fmt.Errorf("jeda tidak boleh negatif")
 		}
-		normalized = append(normalized, s)
+		if previousDelay > step.DelayHours {
+			return nil, fmt.Errorf("waktu langkah harus berurutan dari paling awal")
+		}
+		previousDelay = step.DelayHours
+		normalized = append(normalized, step)
 	}
 	if len(normalized) == 0 {
 		return nil, fmt.Errorf("minimal satu langkah follow-up dengan pesan")
@@ -458,20 +473,13 @@ func stopActiveFollowUps(agentID uint, sender string) int64 {
 	return res.RowsAffected
 }
 
-// fallbackAIFollowUpMessage mengembalikan pesan fallback jika AI gagal generate
-// pesan follow-up. Pesan fallback sederhana berdasarkan konteks step.
-func fallbackAIFollowUpMessage(step models.FollowUpStep, agentName string) string {
-	if step.AiInstruction != "" {
-		// Coba pakai instruksi sebagai template dasar.
-		instr := strings.TrimSpace(step.AiInstruction)
-		if len(instr) > 200 {
-			instr = instr[:200]
-		}
-		return instr
+// fallbackAIFollowUpMessage = pesan pengganti bila AI gagal generate follow-up.
+// PENTING: TIDAK BOLEH membocorkan instruksi internal (AiInstruction) — pesan
+// fallback selalu generik & ramah, memakai nama penerima bila ada (pola v4).
+func fallbackAIFollowUpMessage(name string) string {
+	greeting := "Halo Kak"
+	if cleanName := strings.TrimSpace(name); cleanName != "" {
+		greeting = "Halo " + cleanName
 	}
-	// Fallback generik.
-	if agentName != "" {
-		return "Halo! Ada yang bisa kami bantu? Jangan ragu untuk bertanya. 😊"
-	}
-	return "Halo! Ada yang bisa dibantu? 😊"
+	return greeting + ", kami ingin menindaklanjuti percakapan sebelumnya. Apakah masih ada yang bisa kami bantu?"
 }
