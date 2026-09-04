@@ -179,54 +179,44 @@ func RequireTenantAdmin() gin.HandlerFunc {
 
 // CSRouteGuard membatasi akses CS-only user hanya ke agent yang di-assign kepadanya.
 // Jika user adalah admin, semua agent bisa diakses (tidak ada batasan).
-// Jika user adalah CS-only, hanya agent yang ada di UserAgentAssignment yang bisa diakses.
+// CSRouteGuard membatasi akun CS-only: hanya boleh menyentuh route Inbox yang
+// sudah masuk daftar izin (allowlist v4). Admin/super admin bebas penuh.
 // WAJIB dipasang SETELAH AuthMiddleware.
 func CSRouteGuard() gin.HandlerFunc {
+	allowed := map[string]map[string]bool{
+		"GET": {
+			"/api/agents": true, "/api/agents-status": true, "/api/agent-unread-summary": true,
+			"/api/agents/:id/wa/status": true, "/api/agents/:id/handoffs": true,
+			"/api/agents/:id/contacts": true, "/api/agents/:id/conversation": true,
+			"/api/agents/:id/inbox/events": true, "/api/agents/:id/inbox/incoming-cursor": true,
+			"/api/agents/:id/history-sync": true, "/api/agents/:id/conversation/brief": true,
+			"/api/agents/:id/link-preview": true, "/api/agents/:id/profile-picture": true,
+			"/api/agents/:id/inbox/unread-summary": true,
+		},
+		"POST": {
+			"/api/agents/:id/inbox/:sender/read": true, "/api/agents/:id/history-sync": true,
+			"/api/agents/:id/inbox/client-debug": true, "/api/agents/:id/conversation/brief": true,
+			"/api/agents/:id/send": true, "/api/agents/:id/send-media": true,
+			"/api/agents/:id/typing": true,
+		},
+		"DELETE": {
+			"/api/agents/:id/handoffs/:sender": true,
+		},
+	}
 	return func(c *gin.Context) {
-		uid := currentUserID(c)
-		if uid == 0 {
+		if isTenantAdmin(c) {
 			c.Next()
 			return
 		}
-		var user models.User
-		if database.DB.Select("is_super_admin, is_cs_only, tenant_id").First(&user, uid).Error != nil {
+		if methods := allowed[c.Request.Method]; methods != nil && methods[c.FullPath()] {
 			c.Next()
 			return
 		}
-		// Admin atau super admin: tidak ada batasan.
-		if user.IsSuperAdmin || !user.IsCSOnly {
-			c.Next()
-			return
-		}
-		// CS-only: cek apakah agent ID yang diminta ada di assignment-nya.
-		agentIDStr := c.Param("id")
-		if agentIDStr == "" {
-			// Route tanpa :id param — izinkan saja (listing umum).
-			c.Next()
-			return
-		}
-		var agentID uint
-		if _, err := strconv.ParseUint(agentIDStr, 10, 64); err == nil {
-			agentID = uint(parseUintParam(agentIDStr))
-		}
-		if agentID == 0 {
-			c.Next()
-			return
-		}
-		tid := currentTenantID(c)
-		var count int64
-		database.DB.Model(&models.UserAgentAssignment{}).
-			Where("tenant_id = ? AND user_id = ? AND agent_id = ?", tid, uid, agentID).
-			Count(&count)
-		if count == 0 {
-			c.AbortWithStatusJSON(403, gin.H{"error": "Akses ditolak: agent tidak di-assign ke akun Anda"})
-			return
-		}
-		c.Next()
+		c.AbortWithStatusJSON(403, gin.H{"error": "Akun CS tidak memiliki izin untuk fitur ini"})
 	}
 }
 
-// parseUintParam adalah helper untuk CSRouteGuard.
+// parseUintParam = helper parsing ID numerik dari path (0 bila tidak valid).
 func parseUintParam(s string) uint64 {
 	v, _ := strconv.ParseUint(s, 10, 64)
 	return v

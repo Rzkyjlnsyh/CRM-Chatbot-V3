@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"log"
+	"regexp"
 	"strings"
 	"time"
 
@@ -12,6 +13,10 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
+
+// csUsernamePattern = aturan username akun CS (huruf, angka, titik, strip,
+// garis bawah; 3–64 karakter). Port dari v4 agar konsisten di semua jalur.
+var csUsernamePattern = regexp.MustCompile(`^[A-Za-z0-9._-]{3,64}$`)
 
 // teamUserResponse membentuk respons user CS yang aman (tanpa password).
 func teamUserResponse(u models.User, agentIDs []uint) gin.H {
@@ -106,6 +111,10 @@ func CreateTeamUser(c *gin.Context) {
 	req.Name = strings.TrimSpace(req.Name)
 	if req.Username == "" || req.Password == "" {
 		c.JSON(400, gin.H{"error": "Username dan password wajib diisi"})
+		return
+	}
+	if !csUsernamePattern.MatchString(req.Username) {
+		c.JSON(400, gin.H{"error": "Username minimal 3 karakter dan hanya boleh berisi huruf, angka, titik, garis bawah, atau strip"})
 		return
 	}
 	if len(req.Password) < 8 {

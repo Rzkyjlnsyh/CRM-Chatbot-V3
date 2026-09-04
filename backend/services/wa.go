@@ -44,6 +44,7 @@ type IncomingMessage struct {
 	ChatJID   types.JID // alamat chat asli; penting untuk read receipt pada akun LID
 	SenderJID types.JID // pengirim asli yang dipakai server WhatsApp
 	ReplyTo   string    // ID pesan yg di-reply (dari ContextInfo)
+	ReplyText string    // teks pesan yg di-reply (kalau tersedia)
 	PushName  string    // nama profil pengirim (dari WA), untuk disimpan ke Contact
 	Timestamp time.Time // timestamp asli WA (dipakai pesan manual perangkat)
 }
@@ -200,7 +201,6 @@ func NormalizeInboxSender(value string) string {
 	}
 	return NormalizePhone(value)
 }
-
 
 // WALabelSnapshot adalah satu label WhatsApp dari hasil sinkronisasi penuh.
 type WALabelSnapshot struct {

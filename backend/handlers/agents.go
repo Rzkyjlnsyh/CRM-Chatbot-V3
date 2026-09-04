@@ -333,10 +333,61 @@ func processMessageLocked(agentID uint, sender types.JID, in services.IncomingMe
 	imageAnalysisProductID := uint(0)
 	imageAnalysisNeedsHuman := false
 	// logRow mencatat satu baris percakapan beserta lampiran media (bila ada).
+	// Upgrade v4: pesan customer yang tergabung saat debounce ("a\nb") dipisah
+	// jadi baris tersendiri (dengan wa_msg_id masing-masing) + dedup per wa_msg_id.
+	createIncomingRow := func(text, waID string) (bool, uint) {
+		if waID != "" {
+			var n int64
+			database.DB.Model(&models.ChatHistory{}).
+				Where("agent_id = ? AND wa_msg_id = ?", agentID, waID).
+				Count(&n)
+			if n > 0 {
+				return false, 0 // sudah tercatat (dedup)
+			}
+		}
+		row := models.ChatHistory{
+			AgentID: agentID, Sender: num, Message: text,
+			MediaType: in.MediaType, MediaPath: mediaPath, FileName: in.FileName, Mimetype: in.Mimetype,
+			WAMsgID: waID, ReplyTo: in.ReplyTo, ReplyText: in.ReplyText,
+			DeliveryStatus: "sent", LiveIncoming: true, CreatedAt: messageTime(in.Timestamp),
+		}
+		if err := database.DB.Create(&row).Error; err != nil {
+			log.Printf("Gagal mencatat ChatHistory (agent %d, %s): %v", agentID, num, err)
+			return false, 0
+		}
+		return true, row.ID
+	}
+	triggerAIStage := func(lastChatID uint) {
+		if agent.AIEnabled {
+			services.Go("crm-ai-stage", func() {
+				services.ApplyLabelRules(agentID, num, in.Text)
+				maybeAssessCRMLeadStage(agentID, num, lastChatID)
+			})
+		}
+	}
 	logRow := func(message, reply string, sendErr error) {
 		status, errMsg, nextRetryAt := deliveryFields(sendErr)
 		if strings.TrimSpace(reply) == "" {
 			status, errMsg, nextRetryAt = "sent", "", nil
+			// v4: pisahkan pesan customer yang tergabung (debounce multi-pesan).
+			lines := nonEmptyMessageLines(message)
+			if len(in.WAMsgIDs) > 1 && len(lines) > 1 {
+				created, lastID := 0, uint(0)
+				for i, line := range lines {
+					waID := ""
+					if i < len(in.WAMsgIDs) {
+						waID = strings.TrimSpace(in.WAMsgIDs[i])
+					}
+					if ok, rowID := createIncomingRow(line, waID); ok {
+						created++
+						lastID = rowID
+					}
+				}
+				if created > 0 {
+					triggerAIStage(lastID)
+				}
+				return
+			}
 		}
 		row := models.ChatHistory{
 			AgentID: agentID, Sender: num, Message: message, Reply: reply,
@@ -345,7 +396,8 @@ func processMessageLocked(agentID uint, sender types.JID, in services.IncomingMe
 			ImageAnalysisModel: imageAnalysisModel, ImageAnalysisConfidence: imageAnalysisConfidence,
 			ImageAnalysisAnswer: imageAnalysisAnswer, ImageAnalysisProductID: imageAnalysisProductID,
 			ImageAnalysisNeedsHuman: imageAnalysisNeedsHuman,
-			WAMsgID:                 in.WAMsgID, ReplyTo: in.ReplyTo,
+			WAMsgID:                 in.WAMsgID, ReplyTo: in.ReplyTo, ReplyText: in.ReplyText,
+			LiveIncoming:   strings.TrimSpace(reply) == "",
 			DeliveryStatus: status, SendError: errMsg, NextRetryAt: nextRetryAt,
 		}
 		if err := database.DB.Create(&row).Error; err != nil {
