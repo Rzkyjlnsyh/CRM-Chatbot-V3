@@ -61,7 +61,10 @@ func main() {
 	// Sambungkan ulang semua agent yang sudah ter-link.
 	services.Go("StartAgents", handlers.StartAgents)
 	handlers.CleanupBroadcastJunk() // hapus thread sistem @broadcast/@newsletter yang bocor
+	handlers.CleanupOrphanAssignments() // hapus relasi CS-agent yang sudah tidak valid
 	services.SetHistorySyncHandler(handlers.OnWAHistorySync)
+	services.SetHistoryChatStateHandler(handlers.OnWAHistoryChatState)
+	services.SetWhatsAppReadStateHandler(handlers.OnWAWhatsAppReadState)
 	services.SetMessageRevokeHandler(handlers.OnWAMessageRevoke)
 	services.SetChatPresenceHandler(handlers.OnWAChatPresence)
 	services.StartReconnectWatchdogCtx(appCtx, 90*time.Second)
@@ -142,6 +145,7 @@ func main() {
 		api.GET("/shipping/addresses", handlers.AuthMiddleware(), handlers.GetMengantarAddresses)
 
 		auth := api.Group("", handlers.AuthMiddleware())
+	auth.Use(handlers.CSRouteGuard()) // CS-only hanya bisa akses agent yang di-assign
 		{
 			// Endpoint lama (back-compat) -> beroperasi pada agent default (id 1).
 			auth.GET("/wa/status", handlers.GetNumberStatus)
@@ -320,6 +324,13 @@ func main() {
 			auth.POST("/agents/:id/media-assets", handlers.UploadMediaAsset)
 			auth.DELETE("/agents/:id/media-assets/:assetId", handlers.DeleteMediaAsset)
 			auth.GET("/agents/:id/history-media/:cid", handlers.GetHistoryMedia)
+			// --- Team CS Management (admin-only) ---
+			auth.GET("/team/users", handlers.RequireTenantAdmin(), handlers.ListTeamUsers)
+			auth.POST("/team/users", handlers.RequireTenantAdmin(), handlers.CreateTeamUser)
+			auth.PUT("/team/users/:uid", handlers.RequireTenantAdmin(), handlers.UpdateTeamUser)
+			auth.DELETE("/team/users/:uid", handlers.RequireTenantAdmin(), handlers.DeleteTeamUser)
+			auth.GET("/team/activity", handlers.RequireTenantAdmin(), handlers.ListCSActivity)
+
 			auth.GET("/agents/:id/history-sync/status", handlers.GetHistorySyncStatus)
 			auth.GET("/agents/:id/inbox/events", handlers.InboxEvents)
 			auth.GET("/agents/:id/inbox/unread-summary", handlers.InboxUnreadSummary)

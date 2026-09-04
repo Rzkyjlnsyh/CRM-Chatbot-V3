@@ -144,6 +144,19 @@ func OnWAMessage(agentID uint, sender types.JID, in services.IncomingMessage) {
 		log.Printf("Gagal memastikan kontak CRM (agent %d, %s): %v", agentID, num, err)
 	}
 
+	// v4: Majukan last_msg_at dan increment unread count WA agar badge inbox
+	// akurat segera, tanpa menunggu HistorySync. Khusus pesan non-grup.
+	if !sender.IsEmpty() && sender.Server != "g.us" {
+		ts := in.Timestamp
+		if ts.IsZero() {
+			ts = time.Now()
+		}
+		touchInboxLastMsg(agentID, num, ts)
+		if err := recordIncomingWAUnread(agentID, num, ts); err != nil {
+			log.Printf("WARN: recordIncomingWAUnread agent %d %s: %v", agentID, num, err)
+		}
+	}
+
 	// Notifikasi webhook tenant (bila diset) untuk setiap pesan masuk nyata — asinkron,
 	// tidak memblokir alur balasan. Lewati pesan protokol/kosong (bukan teks & bukan media).
 	if in.MediaType != "" || strings.TrimSpace(in.Text) != "" {
@@ -218,7 +231,7 @@ func OnWAOwnMessage(agentID uint, recipient types.JID, in services.IncomingMessa
 	}).Error; err != nil {
 		log.Printf("Gagal mencatat balasan manual perangkat (agent %d, %s): %v", agentID, num, err)
 	}
-	PublishInboxEvent(agentID, "new_message", num, in.WAMsgID)
+	PublishInboxEvent(agentID, "state", num, in.WAMsgID)
 	// Real-time learning: balasan CS manusia baru = materi belajar terbaru.
 	services.MaybeTriggerIncrementalLearning(agentID)
 }
@@ -1030,13 +1043,20 @@ func logTurn(agentID uint, num, msg, reply string, fromHuman bool, replyTo strin
 	row := models.ChatHistory{
 		AgentID: agentID, Sender: num, Message: msg, Reply: reply, FromHuman: fromHuman,
 		ReplyTo: replyTo, ReplyText: replyText,
+		// Pesan masuk live = bisa dipakai cursor notifikasi (fallback polling).
+		LiveIncoming: !fromHuman && strings.TrimSpace(msg) != "",
 	}
 	if err := database.DB.Create(&row).Error; err != nil {
 		log.Printf("Gagal logTurn (agent %d, %s): %v", agentID, num, err)
 		return
 	}
-	// Realtime: browser yang membuka inbox langsung melihat pesan masuk.
-	PublishInboxEvent(agentID, "new_message", num, "")
+	if !fromHuman {
+		// Pesan customer masuk: satu-satunya sinyal yang memicu bunyi di browser.
+		publishIncomingInboxEvent(agentID, num, row.WAMsgID)
+	} else {
+		// Balasan CS/AI: refresh UI saja, tanpa bunyi.
+		publishInboxEvent(agentID, num, "state")
+	}
 }
 
 // --- Cek Ongkir Realtime via RajaOngkir ---

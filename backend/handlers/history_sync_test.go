@@ -67,7 +67,9 @@ func TestOnWAMessageRevoke(t *testing.T) {
 	OnWAMessageRevoke(2, "R1", time.Now())
 	var got models.ChatHistory
 	database.DB.First(&got, row.ID)
-	if !got.Revoked || got.Message != "Pesan ini dihapus" {
+	// v4: handler menandai flag revoked; frontend menampilkan "Pesan ini dihapus"
+	// berdasarkan flag tersebut (bukan teks Message).
+	if !got.Revoked {
 		t.Fatalf("revoke tidak diterapkan: %+v", got)
 	}
 }

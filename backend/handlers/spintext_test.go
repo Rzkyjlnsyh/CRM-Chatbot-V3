@@ -15,9 +15,9 @@ func TestSpinTextPilihSalahSatuOpsi(t *testing.T) {
 func TestSpinTextTanpaSpinTidakBerubah(t *testing.T) {
 	for _, s := range []string{
 		"pesan biasa tanpa kurung",
-		"Halo {nama}, ada promo",       // placeholder personalize harus utuh
-		"harga {masih dirahasiakan}",   // kurung tanpa '|' -> literal
-		"kurung nyasar { tanpa tutup",  // tak berpasangan -> literal
+		"Halo {nama}, ada promo",      // placeholder personalize harus utuh
+		"harga {masih dirahasiakan}",  // kurung tanpa '|' -> literal
+		"kurung nyasar { tanpa tutup", // tak berpasangan -> literal
 		"tutup } duluan { juga aman",
 	} {
 		if got := spinText(s); got != s {

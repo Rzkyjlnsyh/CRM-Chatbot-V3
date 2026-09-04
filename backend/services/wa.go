@@ -160,6 +160,48 @@ func SetLabelHandlers(edit LabelEditHandler, assoc LabelAssocHandler) {
 	onLabelAssoc = assoc
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Inbox Chat State (v4 — ported dari chatloop-1.6-1.7)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// HistoryChatState membawa snapshot status satu percakapan dari HistorySync WA.
+// Berisi jumlah unread, marked-unread, dan timestamp pesan terakhir.
+type HistoryChatState struct {
+	Sender       string
+	UnreadCount  int
+	MarkedUnread bool
+	Timestamp    time.Time // LastMsgTimestamp dari WA
+}
+
+// HistoryChatStateHandler dipanggil saat engine WA menerima snapshot status chat.
+type HistoryChatStateHandler func(agentID uint, states []HistoryChatState)
+
+// WhatsAppReadStateHandler dipanggil saat HP mengirim sinyal baca/belum-baca.
+type WhatsAppReadStateHandler func(agentID uint, sender string, read bool, timestamp time.Time)
+
+var (
+	onHistoryChatState  HistoryChatStateHandler
+	onWhatsAppReadState WhatsAppReadStateHandler
+)
+
+func SetHistoryChatStateHandler(handler HistoryChatStateHandler)   { onHistoryChatState = handler }
+func SetWhatsAppReadStateHandler(handler WhatsAppReadStateHandler) { onWhatsAppReadState = handler }
+
+// NormalizeInboxSender mempertahankan alamat thread grup (JID @g.us),
+// sedangkan thread personal dinormalisasi ke nomor telepon tanpa kode negara berlebih.
+func NormalizeInboxSender(value string) string {
+	value = strings.TrimPrefix(strings.TrimSpace(value), "+")
+	if IsGroupJID(value) {
+		jid, err := types.ParseJID(value)
+		if err != nil || jid.Server != types.GroupServer || jid.User == "" {
+			return ""
+		}
+		return jid.String()
+	}
+	return NormalizePhone(value)
+}
+
+
 // WALabelSnapshot adalah satu label WhatsApp dari hasil sinkronisasi penuh.
 type WALabelSnapshot struct {
 	LabelID string

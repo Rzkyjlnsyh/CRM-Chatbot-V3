@@ -221,7 +221,7 @@ async function main() {
   // Beri waktu vite start singkat.
   await new Promise((r) => setTimeout(r, 800));
 
-  const air = ensureAir();
+  const air = (process.env.NO_AIR || ROOT.includes(' ')) ? null : ensureAir();
   const childEnv = {
     GOCACHE: goCache,
   };

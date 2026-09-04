@@ -1026,6 +1026,9 @@ func contactNames(agentID uint) map[string]string {
 func OnAgentConnected(agentID uint) {
 	// Rapikan data lama yang menyimpan pengirim sebagai LID -> nomor telepon.
 	migrateLIDSenders(agentID)
+	// v4: bootstrap status unread dari WA setelah connect agar badge akurat.
+	// Berjalan async agar tidak memblok handler connected (yang harus cepat).
+	services.Go("reconcileUnread", func() { reconcileUnreadAfterConnect(agentID) })
 }
 
 // ChatContacts = kontak yang PERNAH chat agent ini (sumber broadcast paling aman). Tanpa yang opt-out.

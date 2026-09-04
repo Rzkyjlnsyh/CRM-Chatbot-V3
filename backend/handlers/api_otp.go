@@ -20,7 +20,7 @@ import (
 // OTP lewat REST API: generate + kirim + verifikasi. Auth API key per-nomor.
 
 const otpRequestCooldown = 60 * time.Second // jeda minimal antar-permintaan OTP ke satu nomor
-const otpMaxAttempts = 5                     // batas percobaan verifikasi salah sebelum kode dibuang
+const otpMaxAttempts = 5                    // batas percobaan verifikasi salah sebelum kode dibuang
 
 // generateOTPCode membuat kode numerik acak (crypto/rand) sepanjang n digit.
 func generateOTPCode(n int) string {

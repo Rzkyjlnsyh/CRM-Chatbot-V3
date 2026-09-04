@@ -144,7 +144,6 @@ func DeleteMediaAsset(c *gin.Context) {
 	c.JSON(200, gin.H{"success": true, "message": "Media dihapus"})
 }
 
-
 // ServeMediaAssetFile menyajikan file media asset (untuk preview di dashboard).
 // Route publik dengan token query — pola sama dengan ServeProductImage.
 // GET /api/agents/:id/media-assets/:assetId/file

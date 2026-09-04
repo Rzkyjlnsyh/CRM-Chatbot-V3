@@ -62,6 +62,8 @@ import FollowUpPanel from '../components/FollowUpPanel';
 import ProductPanel from '../components/ProductPanel';
 import GroupGuardPanel from '../components/GroupGuardPanel';
 import StatusPanel from '../components/StatusPanel';
+import TeamPanel from '../components/TeamPanel';
+import PeopleAltIcon from '@mui/icons-material/PeopleAlt';
 import AutoStoriesIcon from '@mui/icons-material/AutoStoriesOutlined';
 import PermMediaOutlinedIcon from '@mui/icons-material/PermMediaOutlined';
 import PageHeader from '../components/PageHeader';
@@ -234,6 +236,7 @@ const NAV_GROUPS = [
   ] },
   { section: 'Akun', items: [
     { id: 'ai-model', label: 'AI & Model', icon: <AutoAwesomeIcon fontSize="small" /> },
+    { id: 'tim-cs', label: 'Tim CS', icon: <PeopleAltIcon fontSize="small" /> },
     { id: 'widget', label: 'Widget & Link', icon: <WidgetsIcon fontSize="small" /> },
     { id: 'api', label: 'REST API', icon: <ApiIcon fontSize="small" /> },
     { id: 'settings', label: 'Pengaturan', icon: <SettingsIcon fontSize="small" /> },
@@ -2402,6 +2405,7 @@ export default function Dashboard() {
         {tab === 'api' && <ApiPanel agentId={agentId} onOpenDashboard={() => setTab('dashboard')} />}
         {tab === 'widget' && <WidgetPanel agentId={agentId} />}
         {tab === 'status' && <StatusPanel agentId={agentId} />}
+        {tab === 'tim-cs' && <TeamPanel agents={agents} />}
         {tab === 'kontak' && (
           <ContactsPanel agentId={agentId}
             onBroadcast={(recipients) => { setSeed({ kind: 'broadcast', value: recipients, n: Date.now() }); setTab('broadcast'); }}

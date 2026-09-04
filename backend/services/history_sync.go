@@ -104,6 +104,9 @@ func (w *waInstance) processHistorySync(payload *waHistorySync.HistorySync, deep
 
 	imported, skipped := 0, 0
 	batch := make([]HistoricalMessage, 0, historySyncChunkSize)
+	// Kumpulkan chat state dari setiap conversation untuk InboxReadState.
+	var chatStates []HistoryChatState
+
 	flush := func() bool {
 		if onHistorySync == nil || len(batch) == 0 {
 			return true
@@ -124,6 +127,22 @@ func (w *waInstance) processHistorySync(payload *waHistorySync.HistorySync, deep
 
 	for _, conv := range payload.GetConversations() {
 		lastTs := time.Unix(int64(conv.GetLastMsgTimestamp()), 0)
+
+		// Ekstrak chat state dari metadata conversation (v4: unread, marked unread, timestamp).
+		sender := NormalizeInboxSender(conv.GetID())
+		if sender != "" && onHistoryChatState != nil {
+			unread := int(conv.GetUnreadCount())
+			if unread < 0 {
+				unread = 0
+			}
+			chatStates = append(chatStates, HistoryChatState{
+				Sender:       sender,
+				UnreadCount:  unread,
+				MarkedUnread: conv.GetMarkedAsUnread(),
+				Timestamp:    lastTs,
+			})
+		}
+
 		for _, msgWrap := range conv.GetMessages() {
 			msgEvt := msgWrap.GetMessage()
 			if msgEvt == nil {
@@ -146,8 +165,16 @@ func (w *waInstance) processHistorySync(payload *waHistorySync.HistorySync, deep
 		}
 	}
 	flush()
+
+	// Kirim semua chat state setelah pesan selesai diproses, agar last_msg_at
+	// dari pesan baru tidak menggeser batas baca yang diset dari state WA.
+	if len(chatStates) > 0 && onHistoryChatState != nil {
+		onHistoryChatState(w.agentID, chatStates)
+	}
+
 	return imported, skipped, nil
 }
+
 
 // unwrapHistoryMessage memparse satu pesan riwayat menjadi HistoricalMessage.
 func unwrapHistoryMessage(w *waInstance, conv *waHistorySync.Conversation, msgEvt *waWeb.WebMessageInfo, lastTs time.Time) (HistoricalMessage, bool) {

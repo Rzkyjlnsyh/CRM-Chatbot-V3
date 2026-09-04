@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"strings"
 	"sync"
@@ -409,4 +410,68 @@ func generateAIFollowUpMsg(agentID uint, number, name string, step models.Follow
 	}
 	log.Printf("FollowUp AI: generated untuk %s (%d chars)", number, len(reply))
 	return reply, true
+}
+
+// ---------------------------------------------------------------------------
+// Follow-up Helpers Baru (v4 — ported dari chatloop-1.6-1.7)
+// ---------------------------------------------------------------------------
+
+// normalizeFollowUpSteps memvalidasi dan menormalisasi slice steps sebelum disimpan.
+// Memastikan: delay >= 0, message tidak kosong (atau ai_generated harus true),
+// step_order berurutan, dan total langkah tidak melebihi batas.
+func normalizeFollowUpSteps(steps []followUpStepReq) ([]followUpStepReq, error) {
+	const maxSteps = 20
+	var normalized []followUpStepReq
+	for _, s := range steps {
+		// Skip step yang tidak punya pesan maupun instruksi AI.
+		if strings.TrimSpace(s.Message) == "" && !s.AiGenerated {
+			continue
+		}
+		if s.DelayHours < 0 {
+			s.DelayHours = 0
+		}
+		normalized = append(normalized, s)
+	}
+	if len(normalized) == 0 {
+		return nil, fmt.Errorf("minimal satu langkah follow-up dengan pesan")
+	}
+	if len(normalized) > maxSteps {
+		return nil, fmt.Errorf("maksimal %d langkah follow-up", maxSteps)
+	}
+	return normalized, nil
+}
+
+// stopActiveFollowUps menghentikan semua enrollment aktif untuk kontak (sender)
+// pada agent tertentu. Dipakai saat customer membalas (stop_on_reply) atau
+// saat CS secara manual menghentikan follow-up.
+func stopActiveFollowUps(agentID uint, sender string) int64 {
+	res := database.DB.Model(&models.FollowUpEnrollment{}).
+		Where("agent_id = ? AND sender = ? AND status = ?", agentID, sender, "active").
+		Update("status", "stopped")
+	if res.Error != nil {
+		log.Printf("[followup] gagal stop follow-up untuk %s agent %d: %v", sender, agentID, res.Error)
+		return 0
+	}
+	if res.RowsAffected > 0 {
+		log.Printf("[followup] %d enrollment dihentikan untuk %s (agent %d)", res.RowsAffected, sender, agentID)
+	}
+	return res.RowsAffected
+}
+
+// fallbackAIFollowUpMessage mengembalikan pesan fallback jika AI gagal generate
+// pesan follow-up. Pesan fallback sederhana berdasarkan konteks step.
+func fallbackAIFollowUpMessage(step models.FollowUpStep, agentName string) string {
+	if step.AiInstruction != "" {
+		// Coba pakai instruksi sebagai template dasar.
+		instr := strings.TrimSpace(step.AiInstruction)
+		if len(instr) > 200 {
+			instr = instr[:200]
+		}
+		return instr
+	}
+	// Fallback generik.
+	if agentName != "" {
+		return "Halo! Ada yang bisa kami bantu? Jangan ragu untuk bertanya. 😊"
+	}
+	return "Halo! Ada yang bisa dibantu? 😊"
 }

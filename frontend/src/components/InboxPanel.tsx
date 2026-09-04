@@ -1140,16 +1140,24 @@ export default function InboxPanel({
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Realtime SSE (pola v4): invalidasi daftar & percakapan + suara + indikator mengetik.
   const handleLiveEvent = useCallback((ev: InboxLiveEvent) => {
-    if (ev.kind === 'new_message' || ev.kind === 'read_state') {
-      void qc.invalidateQueries({ queryKey: ['contacts', agentId] });
-      void qc.invalidateQueries({ queryKey: ['conversation', agentId, ev.sender ?? sender] });
-      if (ev.kind === 'new_message' && ev.sender && ev.sender !== sender) playInboxSound();
-    } else if (ev.kind === 'typing') {
-      setTypingSender(ev.sender ?? null);
-      if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
-      typingTimerRef.current = setTimeout(() => setTypingSender(null), 4000);
+    if (ev.kind === 'typing') {
+      // active=false berarti pelanggan berhenti mengetik → hapus indikator segera.
+      if (ev.active) {
+        setTypingSender(ev.sender ?? null);
+        if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
+        typingTimerRef.current = setTimeout(() => setTypingSender(null), 4000);
+      } else if (typingSender === ev.sender) {
+        setTypingSender(null);
+      }
+      return;
     }
-  }, [qc, agentId, sender]);
+    // Hanya pesan MASUK (kind=incoming) yang memicu bunyi; sisanya refresh UI saja.
+    if (ev.kind === 'incoming') {
+      if (ev.sender && ev.sender !== sender) playInboxSound();
+    }
+    void qc.invalidateQueries({ queryKey: ['contacts', agentId] });
+    void qc.invalidateQueries({ queryKey: ['conversation', agentId, ev.sender ?? sender] });
+  }, [qc, agentId, sender, typingSender]);
   useInboxRealtime(agentId, handleLiveEvent);
   const bottomRef = useRef<HTMLDivElement>(null);
   const chatRef = useRef<HTMLDivElement>(null);

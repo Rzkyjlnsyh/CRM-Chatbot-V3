@@ -74,8 +74,8 @@ func CheckShipping(c *gin.Context) {
 	}
 
 	type EstimateResult struct {
-		Address   services.MengantarAddress          `json:"address"`
-		Estimates map[string]any                     `json:"estimates"`
+		Address   services.MengantarAddress `json:"address"`
+		Estimates map[string]any            `json:"estimates"`
 	}
 	results := make([]EstimateResult, 0, len(addresses))
 	if len(addresses) > 5 {
@@ -218,10 +218,10 @@ func GetShippingOrderDetail(c *gin.Context) {
 			if len(track.History) > 0 {
 				last := track.History[len(track.History)-1]
 				database.DB.Model(&order).Updates(map[string]any{
-					"status":              track.Status,
-					"status_category":     track.StatusCategory,
-					"last_tracking_date":  last.Date,
-					"last_tracking_desc":  last.Desc,
+					"status":             track.Status,
+					"status_category":    track.StatusCategory,
+					"last_tracking_date": last.Date,
+					"last_tracking_desc": last.Desc,
 				})
 			}
 		}
@@ -247,20 +247,20 @@ func CreateShippingOrder(c *gin.Context) {
 	}
 
 	var req struct {
-		Sender                string  `json:"sender"`                   // nomor WA customer
-		Courier               string  `json:"courier"`                  // JNE atau JT
-		CustomerName          string  `json:"customer_name"`
-		CustomerAddress       string  `json:"customer_address"`
-		CustomerPhone         string  `json:"customer_phone"`
-		DestinationAddressID  string  `json:"destination_address_id"`   // _id dari /address/search
-		OriginAddressID       string  `json:"origin_address_id"`        // _id saved address (optional)
-		OriginAutofillID      string  `json:"origin_autofill_id"`       // PICKUP_AUTOFILL (optional)
-		WeightGram            int     `json:"weight_gram"`
-		Quantity              int     `json:"quantity"`
-		ParcelContent         string  `json:"parcel_content"`
-		GoodsValue            int     `json:"goods_value"`
-		CodAmount             int     `json:"cod_amount"`
-		DeliveryInstruction   string  `json:"delivery_instruction"`
+		Sender               string `json:"sender"`  // nomor WA customer
+		Courier              string `json:"courier"` // JNE atau JT
+		CustomerName         string `json:"customer_name"`
+		CustomerAddress      string `json:"customer_address"`
+		CustomerPhone        string `json:"customer_phone"`
+		DestinationAddressID string `json:"destination_address_id"` // _id dari /address/search
+		OriginAddressID      string `json:"origin_address_id"`      // _id saved address (optional)
+		OriginAutofillID     string `json:"origin_autofill_id"`     // PICKUP_AUTOFILL (optional)
+		WeightGram           int    `json:"weight_gram"`
+		Quantity             int    `json:"quantity"`
+		ParcelContent        string `json:"parcel_content"`
+		GoodsValue           int    `json:"goods_value"`
+		CodAmount            int    `json:"cod_amount"`
+		DeliveryInstruction  string `json:"delivery_instruction"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(400, gin.H{"error": "Data tidak valid"})

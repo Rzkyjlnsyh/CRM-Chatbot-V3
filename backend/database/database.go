@@ -90,9 +90,14 @@ func Init() {
 		&models.ConversationRead{},
 		&models.GroupGuardConfig{}, &models.GroupModerationLog{},
 		&models.MetaConversionEvent{},
+		// v4 additions (ported from chatloop-1.6-1.7)
+		&models.InboxReadState{},
+		&models.UserAgentAssignment{},
+		&models.CSActivityLog{},
 	)
 
 	backfillKnowledgeCharCount()
+	backfillInboxLastMsgAt()
 	recoverStuckCrawlJobs()
 	seedSuperAdmin()
 	seedDefaultTenant()
@@ -126,6 +131,44 @@ func backfillKnowledgeCharCount() {
 	}
 	if len(rows) > 0 {
 		log.Printf("Backfill char_count untuk %d knowledge lama", len(rows))
+	}
+}
+
+// backfillInboxLastMsgAt mengisi last_msg_at InboxReadState dari chat_histories
+// untuk data yang sudah ada sebelum kolom ini dibuat (v4 upgrade).
+// Idempoten: hanya menyentuh baris yang last_msg_at masih NULL.
+func backfillInboxLastMsgAt() {
+	// Cek dulu apakah tabel inbox_read_states sudah ada data yang perlu di-backfill.
+	var nullCount int64
+	DB.Model(&models.InboxReadState{}).Where("last_msg_at IS NULL").Count(&nullCount)
+	if nullCount == 0 {
+		return
+	}
+
+	// Query: cari pasangan (agent_id, sender) dengan created_at terbaru dari chat_histories.
+	type latestMsg struct {
+		AgentID   uint
+		Sender    string
+		LatestAt  time.Time
+	}
+	var rows []latestMsg
+	DB.Raw(`
+		SELECT agent_id, sender, MAX(created_at) as latest_at
+		FROM chat_histories
+		GROUP BY agent_id, sender
+	`).Scan(&rows)
+
+	updated := 0
+	for _, r := range rows {
+		res := DB.Model(&models.InboxReadState{}).
+			Where("agent_id = ? AND sender = ? AND last_msg_at IS NULL", r.AgentID, r.Sender).
+			Update("last_msg_at", r.LatestAt)
+		if res.RowsAffected > 0 {
+			updated++
+		}
+	}
+	if updated > 0 {
+		log.Printf("Backfill last_msg_at: %d inbox read state diperbarui", updated)
 	}
 }
 

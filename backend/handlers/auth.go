@@ -140,6 +140,98 @@ func RequireSuperAdmin() gin.HandlerFunc {
 	}
 }
 
+// currentUserID mengambil ID user yang sedang login dari gin context.
+// Diasumsikan AuthMiddleware sudah dipanggil sebelumnya.
+func currentUserID(c *gin.Context) uint {
+	if v, ok := c.Get("user_id"); ok {
+		if id, ok := v.(uint); ok {
+			return id
+		}
+	}
+	return 0
+}
+
+// isTenantAdmin mengembalikan true jika user adalah admin tenant (bukan CS-only).
+// CS-only user (IsCSOnly=true) tidak bisa akses endpoint admin.
+func isTenantAdmin(c *gin.Context) bool {
+	uid := currentUserID(c)
+	if uid == 0 {
+		return false
+	}
+	var user models.User
+	if database.DB.Select("is_super_admin, is_cs_only").First(&user, uid).Error != nil {
+		return false
+	}
+	return user.IsSuperAdmin || !user.IsCSOnly
+}
+
+// RequireTenantAdmin memblokir request dari user CS-only — hanya admin tenant yang bisa lewat.
+// WAJIB dipasang SETELAH AuthMiddleware.
+func RequireTenantAdmin() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !isTenantAdmin(c) {
+			c.AbortWithStatusJSON(403, gin.H{"error": "Akses khusus admin"})
+			return
+		}
+		c.Next()
+	}
+}
+
+// CSRouteGuard membatasi akses CS-only user hanya ke agent yang di-assign kepadanya.
+// Jika user adalah admin, semua agent bisa diakses (tidak ada batasan).
+// Jika user adalah CS-only, hanya agent yang ada di UserAgentAssignment yang bisa diakses.
+// WAJIB dipasang SETELAH AuthMiddleware.
+func CSRouteGuard() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		uid := currentUserID(c)
+		if uid == 0 {
+			c.Next()
+			return
+		}
+		var user models.User
+		if database.DB.Select("is_super_admin, is_cs_only, tenant_id").First(&user, uid).Error != nil {
+			c.Next()
+			return
+		}
+		// Admin atau super admin: tidak ada batasan.
+		if user.IsSuperAdmin || !user.IsCSOnly {
+			c.Next()
+			return
+		}
+		// CS-only: cek apakah agent ID yang diminta ada di assignment-nya.
+		agentIDStr := c.Param("id")
+		if agentIDStr == "" {
+			// Route tanpa :id param — izinkan saja (listing umum).
+			c.Next()
+			return
+		}
+		var agentID uint
+		if _, err := strconv.ParseUint(agentIDStr, 10, 64); err == nil {
+			agentID = uint(parseUintParam(agentIDStr))
+		}
+		if agentID == 0 {
+			c.Next()
+			return
+		}
+		tid := currentTenantID(c)
+		var count int64
+		database.DB.Model(&models.UserAgentAssignment{}).
+			Where("tenant_id = ? AND user_id = ? AND agent_id = ?", tid, uid, agentID).
+			Count(&count)
+		if count == 0 {
+			c.AbortWithStatusJSON(403, gin.H{"error": "Akses ditolak: agent tidak di-assign ke akun Anda"})
+			return
+		}
+		c.Next()
+	}
+}
+
+// parseUintParam adalah helper untuk CSRouteGuard.
+func parseUintParam(s string) uint64 {
+	v, _ := strconv.ParseUint(s, 10, 64)
+	return v
+}
+
 // currentTenantID = tenant pemilik request (0 untuk super admin tanpa tenant).
 func currentTenantID(c *gin.Context) uint {
 	if v, ok := c.Get("tenant_id"); ok {

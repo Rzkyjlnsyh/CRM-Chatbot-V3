@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from './services/api';
-import type { Analytics, AIMetrics, Contact, ChatMsg, ConversationBrief, Broadcast, BroadcastDetailData, BroadcastSafetyForm, BroadcastConsentSummary, WAGroup, GroupGuardConfig, GroupModerationLog, LabelInfo, ScheduledMessage, AutoReply, Template, SavedContact, SavedContactsResp, LeadStage, FollowUp, Agent, KnowledgeItem, Handoff, CrawlJob, CrawlPage, KnowledgeUsage, ScheduledStatus, ApiSettings, Flow, Product, ProductOrder, AIForm, AIFormSubmission, MediaAsset, LearningStatus, LearningScore, LearningRun, LearningRunDetail, LearningPatternPage, LearningSnapshot, LearningConfig, MetaConfigData, LeadStageDef, LabelRule, PipelineData } from './types';
+import type { Analytics, AIMetrics, Contact, ChatMsg, ConversationBrief, Broadcast, BroadcastDetailData, BroadcastSafetyForm, BroadcastConsentSummary, WAGroup, GroupGuardConfig, GroupModerationLog, LabelInfo, ScheduledMessage, AutoReply, Template, SavedContact, SavedContactsResp, LeadStage, FollowUp, Agent, KnowledgeItem, Handoff, CrawlJob, CrawlPage, KnowledgeUsage, ScheduledStatus, ApiSettings, Flow, Product, ProductOrder, AIForm, AIFormSubmission, MediaAsset, LearningStatus, LearningScore, LearningRun, LearningRunDetail, LearningPatternPage, LearningSnapshot, LearningConfig, MetaConfigData, LeadStageDef, LabelRule, PipelineData, TeamUser, CSActivityLog, CreateTeamUserRequest, UpdateTeamUserRequest } from './types';
 
 type ContactList = { number: string; name: string }[];
 
@@ -1392,10 +1392,11 @@ export function useTestLabelRules(agentId: number) {
       // ─────────────────────────────────────────────────────────────────────────
 
       export interface InboxLiveEvent {
-      revision: number;
-      kind: 'new_message' | 'read_state' | 'typing';
-      sender?: string;
-      message_id?: string;
+        revision: number;
+        kind: 'incoming' | 'state' | 'revoke' | 'message' | 'history_sync' | 'typing' | 'conversation' | 'read_state' | 'new_message' | string;
+        sender?: string;
+        message_id?: string;
+        active?: boolean; // khusus typing: true = mulai mengetik, false = berhenti
       }
 
       export function useInboxRealtime(
@@ -1473,3 +1474,48 @@ export function useTestLabelRules(agentId: number) {
           },
       });
       }
+
+// ---- Team CS Management ----
+
+export function useTeamUsers() {
+  return useQuery<TeamUser[]>({
+    queryKey: ['team-users'],
+    queryFn: async () => (await api.get('/team/users')).data.data,
+    staleTime: 30_000,
+  });
+}
+
+export function useCreateTeamUser() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (data: CreateTeamUserRequest) =>
+      (await api.post('/team/users', data)).data.data as TeamUser,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['team-users'] }),
+  });
+}
+
+export function useUpdateTeamUser() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, data }: { id: number; data: UpdateTeamUserRequest }) =>
+      (await api.put(`/team/users/${id}`, data)).data.data as TeamUser,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['team-users'] }),
+  });
+}
+
+export function useDeleteTeamUser() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: number) => (await api.delete(`/team/users/${id}`)).data,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['team-users'] }),
+  });
+}
+
+export function useCSActivity() {
+  return useQuery<CSActivityLog[]>({
+    queryKey: ['cs-activity'],
+    queryFn: async () => (await api.get('/team/activity')).data.data,
+    refetchInterval: 30_000,
+    staleTime: 15_000,
+  });
+}

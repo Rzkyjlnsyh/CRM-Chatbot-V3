@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -141,13 +140,4 @@ func ServeProfilePicture(c *gin.Context) {
 	}
 	c.Header("Cache-Control", "private, max-age=3600")
 	c.Redirect(http.StatusFound, url)
-}
-
-// OnWAChatPresence — diteruskan dari services WA saat kontak mengetik.
-func OnWAChatPresence(agentID uint, sender, state string) {
-	if sender == "" {
-		return
-	}
-	log.Printf("[presence] agent=%d sender=%s state=%s", agentID, sender, state)
-	PublishInboxEvent(agentID, "typing", sender, state)
 }
