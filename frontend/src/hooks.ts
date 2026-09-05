@@ -1519,3 +1519,20 @@ export function useCSActivity() {
     staleTime: 15_000,
   });
 }
+
+// ---- Resync riwayat WhatsApp (deep-sync sederhana) ----
+export function useRequestHistoryResync(agentId: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async () =>
+      (await api.post(`/agents/${agentId}/history-sync/resync`)).data as {
+        ok: boolean;
+        message: string;
+        imported?: number;
+        skipped?: number;
+      },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['contacts', agentId] });
+    },
+  });
+}

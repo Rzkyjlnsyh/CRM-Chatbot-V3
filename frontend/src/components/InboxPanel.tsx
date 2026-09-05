@@ -26,11 +26,12 @@ import InsertEmoticonIcon from '@mui/icons-material/InsertEmoticon';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import PhoneOutlinedIcon from '@mui/icons-material/PhoneOutlined';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
+import SyncIcon from '@mui/icons-material/Sync';
 import {
   useContacts, useConversation, useConversationBrief, useRefreshConversationBrief,
   useSendMessage, useSendMedia, postAgentTyping, useRevokeMessage, useResumeBot, useReanalyzeImage,
   useDeleteInboxConversation, useLoadOlderMessages, useMarkConversationRead, useLabels,
-  useInboxRealtime, useLinkPreview, type InboxLiveEvent,
+  useInboxRealtime, useLinkPreview, useRequestHistoryResync, type InboxLiveEvent,
 } from '../hooks';
 import { playInboxSound } from '../services/inboxSound';
 import api from '../services/api';
@@ -1136,6 +1137,9 @@ export default function InboxPanel({
   const [contactInfoOpen, setContactInfoOpen] = useState(false);
   const [copyHint, setCopyHint] = useState('');
   const qc = useQueryClient();
+  // Tombol Resync riwayat (deep-sync sederhana)
+  const [resyncMsg, setResyncMsg] = useState('');
+  const resyncMut = useRequestHistoryResync(agentId);
   const [typingSender, setTypingSender] = useState<string | null>(null);
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Realtime SSE (pola v4): invalidasi daftar & percakapan + suara + indikator mengetik.
@@ -1581,10 +1585,29 @@ export default function InboxPanel({
                       {selectedName || `+${sender}`}
                     </Typography>
                     <Typography noWrap sx={{ fontSize: 12.5, color: WA.meta, lineHeight: 1.2 }}>
-                      {headerSubtitle}
+                      {resyncMsg || headerSubtitle}
                     </Typography>
                   </Box>
                 </Box>
+                <Tooltip title="Resync riwayat WhatsApp">
+                  <IconButton
+                    size="small"
+                    aria-label="Resync riwayat"
+                    sx={{ color: WA.meta }}
+                    onClick={async () => {
+                      try {
+                        const res = await resyncMut.mutateAsync();
+                        setResyncMsg(res.message || 'Sinkronisasi selesai');
+                        setTimeout(() => setResyncMsg(''), 6000);
+                      } catch (e) {
+                        setResyncMsg('Gagal sinkronisasi — WA harus terhubung');
+                        setTimeout(() => setResyncMsg(''), 6000);
+                      }
+                    }}
+                  >
+                    <SyncIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
                 <Tooltip title="Info kontak">
                   <IconButton size="small" onClick={() => setContactInfoOpen(true)} aria-label="Info kontak" sx={{ color: WA.meta }}>
                     <InfoOutlinedIcon fontSize="small" />

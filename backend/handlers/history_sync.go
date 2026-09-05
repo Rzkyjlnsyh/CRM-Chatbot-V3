@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"log"
 	"sort"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"wa-assistant/backend/services"
 
 	"github.com/gin-gonic/gin"
+	"go.mau.fi/whatsmeow/types"
 	"gorm.io/gorm/clause"
 )
 
@@ -316,4 +318,60 @@ func GetHistorySyncStatus(c *gin.Context) {
 		"batches":     st.BatchCount,
 		"in_progress": st.InProgress,
 	})
+}
+
+// RequestHistoryResync — POST /agents/:id/history-sync/resync
+// Tombol Resync dasar (keputusan user: versi sederhana): kirim permintaan
+// riwayat ke perangkat primer, tunggu acknowledgement singkat (maks 20 dtk),
+// lalu laporkan status. Import berjalan lewat jalur pasif yang sudah ada.
+func RequestHistoryResync(c *gin.Context) {
+	id, ok := resolveAgent(c)
+	if !ok {
+		return
+	}
+	wa := services.WA(id)
+	if !wa.IsConnected() {
+		c.JSON(409, gin.H{"error": "WhatsApp belum terhubung"})
+		return
+	}
+
+	// lastKnown: pesan lokal terakhir yang punya wa_msg_id (sync lanjutan);
+	// kosong = bootstrap awal (sync penuh).
+	var lastKnown *types.MessageInfo
+	var last models.ChatHistory
+	if database.DB.Select("sender", "wa_msg_id", "created_at").
+		Where("agent_id = ? AND wa_msg_id IS NOT NULL AND TRIM(wa_msg_id) != ''", id).
+		Order("id DESC").First(&last).Error == nil {
+		chat := types.NewJID(last.Sender, types.DefaultUserServer)
+		lastKnown = &types.MessageInfo{
+			MessageSource: types.MessageSource{Chat: chat, Sender: chat},
+			ID:            types.MessageID(last.WAMsgID),
+			Timestamp:     last.CreatedAt,
+		}
+	}
+
+	// Daftarkan penunggu SEBELUM kirim (hindari ack terlewat).
+	waiter := wa.AddHistoryWaiter("")
+	defer wa.RemoveHistoryWaiter("", waiter)
+	if err := wa.RequestHistoryResync(lastKnown); err != nil {
+		c.JSON(502, gin.H{"error": err.Error()})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
+	defer cancel()
+	select {
+	case <-waiter:
+		st := services.HistorySyncStatusFor(id)
+		c.JSON(200, gin.H{
+			"ok":       true,
+			"message":  "Riwayat WhatsApp berhasil disinkronkan ulang",
+			"imported": st.Imported, "skipped": st.Skipped, "processed": st.Processed,
+		})
+	case <-ctx.Done():
+		c.JSON(200, gin.H{
+			"ok":      true,
+			"message": "Permintaan sinkronisasi dikirim; riwayat akan muncul bertahap",
+		})
+	}
 }

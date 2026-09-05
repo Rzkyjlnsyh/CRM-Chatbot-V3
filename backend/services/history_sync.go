@@ -342,6 +342,38 @@ func (w *waInstance) BuildHistorySyncRequestMessage(lastKnown *types.MessageInfo
 	return client.BuildHistorySyncRequest(lastKnown, count)
 }
 
+// RequestHistoryResync mengirim permintaan riwayat (ON_DEMAND) ke perangkat
+// primer via API resmi whatsmeow. lastKnown nil = bootstrap awal (full sync).
+func (w *waInstance) RequestHistoryResync(lastKnown *types.MessageInfo) error {
+	w.mu.Lock()
+	client := w.client
+	w.mu.Unlock()
+	if client == nil || !w.IsConnected() {
+		return errors.New("WhatsApp belum terhubung")
+	}
+	msg := client.BuildHistorySyncRequest(lastKnown, 0)
+	if msg == nil {
+		return errors.New("gagal membangun permintaan sinkronisasi riwayat")
+	}
+	if client.Store == nil || client.Store.ID == nil {
+		return errors.New("identitas perangkat belum siap")
+	}
+	// Kirim ke diri sendiri — perangkat primer membalas dengan HistorySync.
+	_, err := client.SendMessage(context.Background(), client.Store.ID.ToNonAD(), msg)
+	return err
+}
+
+// AddHistoryWaiter = akses publik untuk kode handler (tombol Resync) agar bisa
+// menunggu acknowledgement HistorySync.
+func (w *waInstance) AddHistoryWaiter(sender string) chan struct{} {
+	return w.addHistoryWaiter(sender)
+}
+
+// RemoveHistoryWaiter = akses publik untuk membatalkan penunggu.
+func (w *waInstance) RemoveHistoryWaiter(sender string, target chan struct{}) {
+	w.removeHistoryWaiter(sender, target)
+}
+
 // DownloadHistoryMedia mengunduh lampiran riwayat WhatsApp saat dibuka di
 // Inbox (on-demand). Metadata = protobuf pesan asli yang disimpan saat
 // HistorySync. Return (bytes, mimetype, err).

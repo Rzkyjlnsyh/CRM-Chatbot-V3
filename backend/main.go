@@ -60,7 +60,7 @@ func main() {
 
 	// Sambungkan ulang semua agent yang sudah ter-link.
 	services.Go("StartAgents", handlers.StartAgents)
-	handlers.CleanupBroadcastJunk() // hapus thread sistem @broadcast/@newsletter yang bocor
+	handlers.CleanupBroadcastJunk()     // hapus thread sistem @broadcast/@newsletter yang bocor
 	handlers.CleanupOrphanAssignments() // hapus relasi CS-agent yang sudah tidak valid
 	services.SetHistorySyncHandler(handlers.OnWAHistorySync)
 	services.SetHistoryChatStateHandler(handlers.OnWAHistoryChatState)
@@ -145,7 +145,7 @@ func main() {
 		api.GET("/shipping/addresses", handlers.AuthMiddleware(), handlers.GetMengantarAddresses)
 
 		auth := api.Group("", handlers.AuthMiddleware())
-	auth.Use(handlers.CSRouteGuard()) // CS-only hanya bisa akses agent yang di-assign
+		auth.Use(handlers.CSRouteGuard()) // CS-only hanya bisa akses agent yang di-assign
 		{
 			// Endpoint lama (back-compat) -> beroperasi pada agent default (id 1).
 			auth.GET("/wa/status", handlers.GetNumberStatus)
@@ -332,6 +332,7 @@ func main() {
 			auth.GET("/team/activity", handlers.RequireTenantAdmin(), handlers.ListCSActivity)
 
 			auth.GET("/agents/:id/history-sync/status", handlers.GetHistorySyncStatus)
+			auth.POST("/agents/:id/history-sync/resync", handlers.RequestHistoryResync)
 			auth.GET("/agents/:id/inbox/events", handlers.InboxEvents)
 			auth.POST("/agents/:id/inbox/reset", handlers.RequireTenantAdmin(), handlers.ResetAgentInbox)
 			auth.GET("/agents/:id/inbox/unread-summary", handlers.InboxUnreadSummary)
