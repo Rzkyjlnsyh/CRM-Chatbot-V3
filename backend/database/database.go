@@ -102,6 +102,12 @@ func Init() {
 	seedSuperAdmin()
 	seedDefaultTenant()
 
+	// Identitas pesan kanonik (pola v4): dedup wa_msg_id + unique index.
+	// Aman dijalankan berulang (idempoten).
+	if err := EnsureCanonicalChatMessageIDs(); err != nil {
+		log.Printf("Peringatan canonical message IDs: %v", err)
+	}
+
 	log.Println("Database ready")
 }
 
