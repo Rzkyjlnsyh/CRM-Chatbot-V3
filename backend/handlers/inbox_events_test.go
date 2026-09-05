@@ -82,15 +82,14 @@ func TestInboxEventHubReplayFromRevision(t *testing.T) {
 	}
 }
 
-// TestInboxUnreadSummary — summary memakai ConversationRead (mark-read fork).
-// (A6 akan memigrasi ke InboxReadState; selama dual-write aktif, tetap valid.)
+// TestInboxUnreadSummary — summary memakai InboxReadState (konsolidasi A6).
 func TestInboxUnreadSummary(t *testing.T) {
 	// DB sendiri (bukan shared history-sync) agar tidak tercemar test lain.
 	db, err := gorm.Open(sqlite.Open("file:inbox-events-test?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("db: %v", err)
 	}
-	if err := db.AutoMigrate(&models.ChatHistory{}, &models.Contact{}, &models.ConversationRead{}, &models.Tenant{}, &models.Agent{}); err != nil {
+	if err := db.AutoMigrate(&models.ChatHistory{}, &models.Contact{}, &models.ConversationRead{}, &models.InboxReadState{}, &models.Tenant{}, &models.Agent{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	db.Where(&models.Tenant{ID: 1}).FirstOrCreate(&models.Tenant{ID: 1})
@@ -98,20 +97,17 @@ func TestInboxUnreadSummary(t *testing.T) {
 	database.DB = db
 
 	gin.SetMode(gin.TestMode)
-	// 2 pesan masuk untuk 6281, 1 untuk 6282 (belum pernah dibaca).
-	seedChat(t, 1, "6281", false, 0)
-	seedChat(t, 1, "6281", false, 0)
-	seedChat(t, 1, "6282", false, 0)
+	// Unread WA: 6281 = 3, 6282 = 2, 6283 = 0 (dibaca semua).
+	now := time.Now()
+	db.Create(&models.InboxReadState{AgentID: 1, Sender: "6281", WhatsAppUnreadCount: 3, LastMsgAt: &now})
+	db.Create(&models.InboxReadState{AgentID: 1, Sender: "6282", WhatsAppUnreadCount: 2, LastMsgAt: &now})
+	db.Create(&models.InboxReadState{AgentID: 1, Sender: "6283", WhatsAppUnreadCount: 0, LastMsgAt: &now})
 
 	r := gin.New()
 	r.GET("/agents/:id/inbox/unread-summary", func(c *gin.Context) {
 		c.Set("tenant_id", uint(1))
 		InboxUnreadSummary(c)
 	})
-	// Baca 6281 sampai id pesan kedua (ambil id asli dari DB).
-	var last models.ChatHistory
-	db.Where("agent_id = 1 AND sender = ?", "6281").Order("id desc").First(&last)
-	readRow(1, "6281", last.ID)
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/agents/1/inbox/unread-summary", nil)
@@ -124,11 +120,11 @@ func TestInboxUnreadSummary(t *testing.T) {
 		IDs   []string `json:"senders"`
 	}
 	_ = json.Unmarshal(w.Body.Bytes(), &body)
-	// 6281 sudah dibaca semua → sisa 1 pesan 6282.
-	if body.Total != 1 {
-		t.Fatalf("total unread %d (harus 1)", body.Total)
+	// 3 + 2 = 5; 6283 tidak masuk (unread 0).
+	if body.Total != 5 {
+		t.Fatalf("total unread %d (harus 5)", body.Total)
 	}
-	if len(body.IDs) != 1 || body.IDs[0] != "6282" {
+	if len(body.IDs) != 2 || body.IDs[0] != "6281" || body.IDs[1] != "6282" {
 		t.Fatalf("senders salah: %v", body.IDs)
 	}
 }

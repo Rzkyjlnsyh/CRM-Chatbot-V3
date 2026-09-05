@@ -394,17 +394,9 @@ func MarkConversationRead(c *gin.Context) {
 		return
 	}
 
-	// Update ConversationRead (tabel lama — tetap dipertahankan untuk kompatibilitas).
-	var rec models.ConversationRead
-	if database.DB.Where("agent_id = ? AND sender = ?", id, sender).First(&rec).Error == nil {
-		database.DB.Model(&rec).Updates(map[string]any{
-			"last_read_chat_id": last.ID, "updated_at": time.Now(),
-		})
-	} else {
-		database.DB.Create(&models.ConversationRead{
-			AgentID: id, Sender: sender, LastReadChatID: last.ID, UpdatedAt: time.Now(),
-		})
-	}
+	// Konsolidasi A6: InboxReadState = sumber kebenaran tunggal.
+	// ConversationRead (tabel lama) TIDAK lagi ditulis — dibiarkan sebagai
+	// arsip legacy; data lama tetap tersimpan.
 
 	// Update InboxReadState (v4) — reset unread count WA dan majukan batas baca.
 	readAt := last.CreatedAt
