@@ -61,8 +61,11 @@ const WA = {
 function MediaView({ agentId, m, token }: { agentId: number; m: ChatMsg; token: string }) {
   const [zoom, setZoom] = useState<string | null>(null);
   const qc = useQueryClient();
-  // Media riwayat WA (HistorySync): belum ada file → unduh on-demand (pola v4).
-  if (m.media_type && !m.from_human && !m.reply && !m.media_path && !m.media_fetch_status) {
+  // Media riwayat WA (HistorySync): belum ada file lokal → tombol unduh
+  // on-demand (pola v4). PENTING: mencakup status 'pending'/'failed' — tanpa
+  // ini, <img> akan menembak /media/:id berulang → 404 banjir di console.
+  if (m.media_type && !m.from_human && !m.reply && !m.media_path) {
+    const failed = m.media_fetch_status === 'failed';
     return (
       <Button
         size="small"
@@ -76,7 +79,7 @@ function MediaView({ agentId, m, token }: { agentId: number; m: ChatMsg; token: 
           await qc.invalidateQueries({ queryKey: ['conversation', agentId, m.sender] });
         }}
       >
-        Unduh media riwayat
+        {failed ? 'Coba unduh media lagi' : 'Unduh media riwayat'}
       </Button>
     );
   }
