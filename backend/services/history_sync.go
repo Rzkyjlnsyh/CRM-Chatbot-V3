@@ -144,12 +144,11 @@ func (w *waInstance) processHistorySync(payload *waHistorySync.HistorySync, deep
 		// Ekstrak chat state dari metadata conversation (v4: unread, marked unread, timestamp).
 		sender := NormalizeInboxSender(conv.GetID())
 		if sender != "" && LooksLikeLID(sender) {
-			// Identitas LID → petakan ke nomor asli; bila belum ada pemetaan,
-			// lewati (jangan simpan angka LID sebagai nomor palsu).
+			// Identitas LID → petakan ke nomor asli bila tersedia; tanpa pemetaan
+			// TETAP SIMPAN (agar chat tidak bolong) — alias-learning akan
+			// menyatukannya begitu HP mengirim nomor asli (SenderAlt).
 			if pn := w.PNForLID(sender); pn != "" {
 				sender = NormalizePhone(pn)
-			} else {
-				sender = ""
 			}
 		}
 		if sender != "" && onHistoryChatState != nil {
@@ -287,12 +286,11 @@ func unwrapHistoryMessage(w *waInstance, conv *waHistorySync.Conversation, msgEv
 	}
 	sender := NormalizePhone(remote)
 	if LooksLikeLID(sender) {
-		// Identitas LID di riwayat → petakan ke nomor asli; tanpa pemetaan,
-		// lewati agar tidak menyimpan angka LID sebagai nomor palsu.
+		// Identitas LID di riwayat → petakan ke nomor asli bila tersedia;
+		// tanpa pemetaan TETAP SIMPAN di bawah LID (chat tidak bolong) —
+		// alias-learning menyatukan saat HP mengirim SenderAlt.
 		if pn := w.PNForLID(sender); pn != "" {
 			sender = NormalizePhone(pn)
-		} else {
-			return HistoricalMessage{}, false
 		}
 	}
 	msg := msgEvt.GetMessage()

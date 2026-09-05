@@ -32,11 +32,11 @@ export function useContacts(agentId: number, labelId?: string) {
   return useQuery<Contact[]>({
     queryKey: ['contacts', agentId, labelId || ''],
     queryFn: async () => (await api.get(`/agents/${agentId}/contacts`, { params: labelId ? { label_id: labelId } : {} })).data.data,
+    staleTime: 10_000,
     enabled: !!agentId,
     // Poll lebih longgar: list kontak tidak perlu real-time ketat.
     refetchInterval: 12_000,
     refetchIntervalInBackground: false,
-    staleTime: 5_000,
     placeholderData: (prev) => prev,
   });
 }

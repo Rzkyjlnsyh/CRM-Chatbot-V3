@@ -62,9 +62,9 @@ function MediaView({ agentId, m, token }: { agentId: number; m: ChatMsg; token: 
   const [zoom, setZoom] = useState<string | null>(null);
   const qc = useQueryClient();
   // Media riwayat WA (HistorySync): belum ada file lokal → tombol unduh
-  // on-demand (pola v4). PENTING: mencakup status 'pending'/'failed' — tanpa
-  // ini, <img> akan menembak /media/:id berulang → 404 banjir di console.
-  if (m.media_type && !m.from_human && !m.reply && !m.media_path) {
+  // on-demand (pola v4). Berlaku untuk SEMUA pesan (termasuk balasan CS &
+  // media dari_human) — tanpa ini, <img> menembak /media/:id berulang → 404.
+  if (m.media_type && !m.media_path) {
     const failed = m.media_fetch_status === 'failed';
     return (
       <Button
@@ -1224,7 +1224,11 @@ export default function InboxPanel({
     if (ev.kind === 'incoming') {
       if (ev.sender && ev.sender !== sender) playInboxSound();
     }
-    void qc.invalidateQueries({ queryKey: ['contacts', agentId] });
+    // Refresh daftar HANYA untuk event yang mengubah isi chat (bukan state
+    // baca/typing) — mencegah sidebar refetch berat berkali-kali → ngelag.
+    if (ev.kind === 'incoming' || ev.kind === 'message' || ev.kind === 'revoke' || ev.kind === 'history_sync') {
+      void qc.invalidateQueries({ queryKey: ['contacts', agentId] });
+    }
     void qc.invalidateQueries({ queryKey: ['conversation', agentId, ev.sender ?? sender] });
   }, [qc, agentId, sender, typingSender]);
   useInboxRealtime(agentId, handleLiveEvent);

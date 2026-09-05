@@ -280,11 +280,17 @@ func InboxContacts(c *gin.Context) {
 		}
 	}
 	// Gabungkan last_at di Go (hindari COALESCE string SQLite) + urutkan.
+	// PENTING: ambil yang PALING BARU antara state WA dan baris chat terakhir —
+	// bila chat baru tersimpan di identitas lain (LID), state bisa basi dan
+	// kontak jadi tenggelam di urutan ("hilang dari Semua").
 	for i := range rows {
-		if rows[i].RSLast != nil {
+		if rows[i].RSLast == nil {
+			rows[i].RSLast = rows[i].CHLast
 			continue
 		}
-		rows[i].RSLast = rows[i].CHLast
+		if rows[i].CHLast != nil && rows[i].CHLast.After(*rows[i].RSLast) {
+			rows[i].RSLast = rows[i].CHLast
+		}
 	}
 	sort.SliceStable(rows, func(a, b int) bool {
 		ta, tb := rows[a].RSLast, rows[b].RSLast
