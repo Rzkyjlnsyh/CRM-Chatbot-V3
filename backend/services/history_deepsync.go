@@ -109,14 +109,14 @@ func ChatPreviewStale(agentID uint, sender string) bool {
 	if agentID == 0 || sender == "" {
 		return false
 	}
-	var localMax time.Time
+	var localMax *time.Time
 	if err := database.DB.Model(&models.ChatHistory{}).
 		Select("MAX(created_at)").
 		Where("agent_id = ? AND sender = ?", agentID, sender).
 		Scan(&localMax).Error; err != nil {
 		return false
 	}
-	hasLocal := !localMax.IsZero()
+	hasLocal := localMax != nil
 	tip := ChatWATipTime(agentID, sender)
 	if tip.IsZero() {
 		return false
