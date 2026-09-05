@@ -8,6 +8,7 @@ import (
 	"log"
 	"math/rand"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -45,8 +46,10 @@ type IncomingMessage struct {
 	SenderJID types.JID // pengirim asli yang dipakai server WhatsApp
 	ReplyTo   string    // ID pesan yg di-reply (dari ContextInfo)
 	ReplyText string    // teks pesan yg di-reply (kalau tersedia)
-	PushName  string    // nama profil pengirim (dari WA), untuk disimpan ke Contact
-	Timestamp time.Time // timestamp asli WA (dipakai pesan manual perangkat)
+	// MediaMetadata menyimpan envelope pesan WA untuk lazy-download/retry.
+	MediaMetadata []byte
+	PushName      string    // nama profil pengirim (dari WA), untuk disimpan ke Contact
+	Timestamp     time.Time // timestamp asli WA (dipakai pesan manual perangkat)
 }
 
 // MessageHandler dipanggil tiap pesan masuk, membawa ID agent (CS) penerima.
@@ -1361,79 +1364,135 @@ func (w *waInstance) PNForLID(lid string) string {
 	return pn.User
 }
 
-// extractIncoming mengubah pesan WA jadi IncomingMessage (teks atau media yang sudah di-download).
+// extractIncoming mengubah pesan WA jadi IncomingMessage (teks atau media).
+// Upgrade v4: (1) notifikasi protokol (stub) TIDAK jadi bubble chat;
+// (2) wrapper DeviceSent/Ephemeral/ViewOnce dibuka; (3) media yang gagal
+// di-download tetap disimpan dengan MediaMetadata (lazy-download nanti),
+// bukan dibuang.
 func (w *waInstance) extractIncoming(v *events.Message) (IncomingMessage, bool) {
-	m := v.Message
+	if v == nil {
+		return IncomingMessage{}, false
+	}
+	if isProtocolSystemNotification(v.SourceWebMsg) {
+		return IncomingMessage{}, false
+	}
+	m := unwrapHistoryProtoMessage(v.Message)
+	if m == nil {
+		return IncomingMessage{}, false
+	}
 	if t := m.GetConversation(); t != "" {
-		return IncomingMessage{Text: normalizeLocationLinkText(t)}, true
+		text := normalizeLocationLinkText(t)
+		text = cleanHistoryExportFormat(text)
+		return IncomingMessage{Text: text}, true
 	}
 	if ext := m.GetExtendedTextMessage(); ext != nil && ext.GetText() != "" {
-		var replyTo string
-		if ci := ext.GetContextInfo(); ci != nil {
-			replyTo = ci.GetStanzaID()
-		}
-		return IncomingMessage{Text: normalizeLocationLinkText(ext.GetText()), ReplyTo: replyTo}, true
+		ci := ext.GetContextInfo()
+		return IncomingMessage{
+			Text:      normalizeLocationLinkText(ext.GetText()),
+			ReplyTo:   contextReplyID(ci),
+			ReplyText: contextReplyPreview(ci),
+		}, true
 	}
 	if text, actionID, replyTo, ok := interactiveReplyText(m); ok {
 		return IncomingMessage{Text: text, ActionID: actionID, ReplyTo: replyTo}, true
 	}
 	ctx := context.Background()
+	mediaMetadata, metadataErr := proto.Marshal(m)
+	if metadataErr != nil {
+		log.Printf("WA agent %d: gagal menyimpan metadata media: %v", w.agentID, metadataErr)
+		mediaMetadata = nil
+	}
+	// download nil-safe: client nil (unit test/offline) = unduhan ditunda,
+	// pesan tetap diteruskan dengan metadata untuk lazy-download.
+	download := func(downloadable whatsmeow.DownloadableMessage) []byte {
+		if w.client == nil {
+			return nil
+		}
+		data, err := w.client.Download(ctx, downloadable)
+		if err != nil {
+			log.Printf("WA agent %d: unduhan media ditunda (pesan tetap disimpan): %v", w.agentID, err)
+			return nil
+		}
+		return data
+	}
 	switch {
 	case m.GetLocationMessage() != nil:
 		loc := m.GetLocationMessage()
+		ci := loc.GetContextInfo()
 		return IncomingMessage{
 			Text:      locationContext(loc.GetName(), loc.GetAddress(), loc.GetComment(), loc.GetURL(), loc.GetDegreesLatitude(), loc.GetDegreesLongitude(), false),
 			MediaType: "location",
-			ReplyTo:   contextReplyID(loc.GetContextInfo()),
+			ReplyTo:   contextReplyID(ci),
+			ReplyText: contextReplyPreview(ci),
 		}, true
 	case m.GetLiveLocationMessage() != nil:
 		loc := m.GetLiveLocationMessage()
+		ci := loc.GetContextInfo()
 		return IncomingMessage{
 			Text:      locationContext("", "", loc.GetCaption(), "", loc.GetDegreesLatitude(), loc.GetDegreesLongitude(), true),
 			MediaType: "location",
-			ReplyTo:   contextReplyID(loc.GetContextInfo()),
+			ReplyTo:   contextReplyID(ci),
+			ReplyText: contextReplyPreview(ci),
 		}, true
 	case m.GetImageMessage() != nil:
 		img := m.GetImageMessage()
-		data, err := w.client.Download(ctx, img)
-		if err != nil {
-			log.Printf("WA agent %d: gagal download gambar: %v", w.agentID, err)
-			return IncomingMessage{}, false
-		}
-		return IncomingMessage{Text: img.GetCaption(), MediaType: "image", Mimetype: img.GetMimetype(), Data: data}, true
+		ci := img.GetContextInfo()
+		return IncomingMessage{
+			Text: img.GetCaption(), MediaType: "image", Mimetype: img.GetMimetype(),
+			MediaMetadata: mediaMetadata,
+			Data:          download(img),
+			ReplyTo:       contextReplyID(ci), ReplyText: contextReplyPreview(ci),
+		}, true
 	case m.GetDocumentMessage() != nil:
 		doc := m.GetDocumentMessage()
-		data, err := w.client.Download(ctx, doc)
-		if err != nil {
-			log.Printf("WA agent %d: gagal download dokumen: %v", w.agentID, err)
-			return IncomingMessage{}, false
-		}
-		return IncomingMessage{Text: doc.GetCaption(), MediaType: "document", Mimetype: doc.GetMimetype(), FileName: doc.GetFileName(), Data: data}, true
+		ci := doc.GetContextInfo()
+		return IncomingMessage{
+			Text: doc.GetCaption(), MediaType: "document", Mimetype: doc.GetMimetype(),
+			FileName:      doc.GetFileName(),
+			MediaMetadata: mediaMetadata,
+			Data:          download(doc),
+			ReplyTo:       contextReplyID(ci), ReplyText: contextReplyPreview(ci),
+		}, true
 	case m.GetVideoMessage() != nil:
 		vid := m.GetVideoMessage()
-		data, err := w.client.Download(ctx, vid)
-		if err != nil {
-			log.Printf("WA agent %d: gagal download video: %v", w.agentID, err)
-			return IncomingMessage{}, false
-		}
-		return IncomingMessage{Text: vid.GetCaption(), MediaType: "video", Mimetype: vid.GetMimetype(), Data: data}, true
+		ci := vid.GetContextInfo()
+		return IncomingMessage{
+			Text: vid.GetCaption(), MediaType: "video", Mimetype: vid.GetMimetype(),
+			MediaMetadata: mediaMetadata,
+			Data:          download(vid),
+			ReplyTo:       contextReplyID(ci), ReplyText: contextReplyPreview(ci),
+		}, true
 	case m.GetAudioMessage() != nil:
 		aud := m.GetAudioMessage()
-		data, err := w.client.Download(ctx, aud)
-		if err != nil {
-			log.Printf("WA agent %d: gagal download audio: %v", w.agentID, err)
-			return IncomingMessage{}, false
-		}
-		return IncomingMessage{MediaType: "audio", Mimetype: aud.GetMimetype(), Data: data}, true
+		ci := aud.GetContextInfo()
+		return IncomingMessage{
+			MediaType: "audio", Mimetype: aud.GetMimetype(),
+			MediaMetadata: mediaMetadata,
+			Data:          download(aud),
+			ReplyTo:       contextReplyID(ci), ReplyText: contextReplyPreview(ci),
+		}, true
 	case m.GetStickerMessage() != nil:
 		st := m.GetStickerMessage()
-		data, err := w.client.Download(ctx, st)
-		if err != nil {
-			return IncomingMessage{}, false
-		}
-		return IncomingMessage{MediaType: "sticker", Mimetype: st.GetMimetype(), Data: data}, true
+		ci := st.GetContextInfo()
+		return IncomingMessage{
+			MediaType: "sticker", Mimetype: st.GetMimetype(),
+			MediaMetadata: mediaMetadata,
+			Data:          download(st),
+			ReplyTo:       contextReplyID(ci), ReplyText: contextReplyPreview(ci),
+		}, true
 	}
 	return IncomingMessage{}, false // tipe pesan lain diabaikan
+}
+
+// historyExportPattern cocokkan baris ekspor WhatsApp: [HH.MM, DD/MM/YYYY] Nama/No: pesan
+var historyExportPattern = regexp.MustCompile(`^\[[\d.,/:]+\]\s*[^:]+:\s*`)
+
+// cleanHistoryExportFormat menghapus prefix ekspor WhatsApp bila terdeteksi.
+func cleanHistoryExportFormat(text string) string {
+	if historyExportPattern.MatchString(text) {
+		return historyExportPattern.ReplaceAllString(text, "")
+	}
+	return text
 }
 
 func normalizeLocationLinkText(text string) string {
