@@ -61,11 +61,11 @@ type Agent struct {
 
 type ChatHistory struct {
 	// ID + compound indexes untuk cursor-based pagination inbox realtime (v4).
-	ID      uint      `gorm:"primaryKey;index:idx_chat_agent_live_cursor,priority:3" json:"id"`
-	AgentID uint      `gorm:"index;index:idx_chat_agent_live_cursor,priority:1;index:idx_chat_agent_wa_msg,priority:1;index:idx_chat_agent_sender_time,priority:1" json:"agent_id"`
-	Sender  string    `gorm:"index;size:32;index:idx_chat_agent_sender_time,priority:2" json:"sender"`
-	Message string    `json:"message"`
-	Reply   string    `json:"reply"`
+	ID      uint   `gorm:"primaryKey;index:idx_chat_agent_live_cursor,priority:3" json:"id"`
+	AgentID uint   `gorm:"index;index:idx_chat_agent_live_cursor,priority:1;index:idx_chat_agent_wa_msg,priority:1;index:idx_chat_agent_sender_time,priority:1" json:"agent_id"`
+	Sender  string `gorm:"index;size:32;index:idx_chat_agent_sender_time,priority:2" json:"sender"`
+	Message string `json:"message"`
+	Reply   string `json:"reply"`
 	// FromHuman: true = balasan CS manusia (via inbox atau device). Dipakai Learning.
 	FromHuman bool `gorm:"not null;default:false" json:"from_human"`
 	// LiveIncoming: true = pesan live (bukan dari history sync). Dipakai cursor
@@ -255,17 +255,17 @@ type CrawlPage struct {
 }
 
 type User struct {
-	ID                  uint       `gorm:"primaryKey" json:"id"`
-	Username            string     `gorm:"uniqueIndex;size:64;not null" json:"username"`
-	Password            string     `json:"-"`
-	Role                string     `gorm:"size:24;default:owner" json:"role"`
-	Name                string     `json:"name"`
-	Email               string     `gorm:"size:255" json:"email"`
-	EmailVerified       bool       `gorm:"default:false" json:"email_verified"`
-	EmailVerifyToken    string     `gorm:"size:128" json:"-"`
-	Phone               string     `gorm:"size:32;index" json:"phone"`
-	TenantID            *uint      `gorm:"index" json:"tenant_id"`
-	IsSuperAdmin        bool       `gorm:"default:false" json:"is_super_admin"`
+	ID               uint   `gorm:"primaryKey" json:"id"`
+	Username         string `gorm:"uniqueIndex;size:64;not null" json:"username"`
+	Password         string `json:"-"`
+	Role             string `gorm:"size:24;default:owner" json:"role"`
+	Name             string `json:"name"`
+	Email            string `gorm:"size:255" json:"email"`
+	EmailVerified    bool   `gorm:"default:false" json:"email_verified"`
+	EmailVerifyToken string `gorm:"size:128" json:"-"`
+	Phone            string `gorm:"size:32;index" json:"phone"`
+	TenantID         *uint  `gorm:"index" json:"tenant_id"`
+	IsSuperAdmin     bool   `gorm:"default:false" json:"is_super_admin"`
 	// Active: CS user bisa dinonaktifkan tanpa hapus akun.
 	Active bool `gorm:"not null;default:true" json:"active"`
 	// IsCSOnly: true = akun CS terbatas (tidak bisa akses semua fitur admin).
@@ -280,6 +280,18 @@ type User struct {
 
 // InboxReadState melacak status baca per-percakapan (sender) per agent.
 // Dipakai untuk badge unread yang akurat dan sinkronisasi dengan WhatsApp.
+
+// SenderAlias merekam asosiasi identitas LID → nomor asli (PN) yang dipelajari
+// dari pesan live WhatsApp (SenderAlt). Tanpa mapping di store WA, HP utama
+// tetap mengirim nomor asli sesekali — asosiasi itu direkam di sini sehingga
+// riwayat yang tersimpan di bawah LID bisa disatukan ke satu identitas.
+type SenderAlias struct {
+	ID        uint      `gorm:"primaryKey" json:"id"`
+	AgentID   uint      `gorm:"uniqueIndex:idx_sender_alias_agent_lid;not null" json:"agent_id"`
+	LID       string    `gorm:"column:lid;type:varchar(32);uniqueIndex:idx_sender_alias_agent_lid;not null" json:"lid"`
+	PN        string    `gorm:"index" json:"pn"`
+	CreatedAt time.Time `json:"created_at"`
+}
 type InboxReadState struct {
 	ID      uint   `gorm:"primaryKey" json:"id"`
 	AgentID uint   `gorm:"uniqueIndex:idx_inbox_read_agent_sender,priority:1;not null" json:"agent_id"`
@@ -313,10 +325,10 @@ type UserAgentAssignment struct {
 
 // CSActivityLog mencatat aktivitas CS untuk keperluan audit dan monitoring.
 type CSActivityLog struct {
-	ID        uint      `gorm:"primaryKey" json:"id"`
-	TenantID  uint      `gorm:"index;not null" json:"tenant_id"`
-	UserID    uint      `gorm:"index;not null" json:"user_id"`
-	AgentID   uint      `gorm:"index;not null" json:"agent_id"`
+	ID       uint `gorm:"primaryKey" json:"id"`
+	TenantID uint `gorm:"index;not null" json:"tenant_id"`
+	UserID   uint `gorm:"index;not null" json:"user_id"`
+	AgentID  uint `gorm:"index;not null" json:"agent_id"`
 	// Action: login | reply | handoff | read | close | etc.
 	Action    string    `gorm:"size:32;not null" json:"action"`
 	Sender    string    `gorm:"size:32" json:"sender,omitempty"`

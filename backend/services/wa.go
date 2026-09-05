@@ -602,6 +602,7 @@ func (w *waInstance) handleEvent(evt interface{}) {
 					recipient := v.Info.Chat
 					if recipient.Server == types.HiddenUserServer {
 						if !v.Info.RecipientAlt.IsEmpty() {
+							RecordSenderAlias(w.agentID, recipient.User, v.Info.RecipientAlt.User)
 							recipient = v.Info.RecipientAlt
 						} else if pn := w.PNForLID(recipient.User); pn != "" {
 							recipient = types.NewJID(pn, types.DefaultUserServer)
@@ -655,6 +656,8 @@ func (w *waInstance) handleEvent(evt interface{}) {
 		contact := v.Info.Sender
 		if contact.Server == types.HiddenUserServer {
 			if !v.Info.SenderAlt.IsEmpty() {
+				// Belajar asosiasi LID→PN (untuk menyatukan riwayat lama).
+				RecordSenderAlias(w.agentID, contact.User, v.Info.SenderAlt.User)
 				contact = v.Info.SenderAlt
 			} else if pn := w.PNForLID(contact.User); pn != "" {
 				contact = types.NewJID(pn, types.DefaultUserServer)
@@ -873,6 +876,25 @@ func NormalizePhone(s string) string {
 		// kembalikan digit apa adanya, JANGAN dipaksa jadi 62xx.
 		return d
 	}
+}
+
+// RecordSenderAlias merekam asosiasi LID → nomor asli yang dipelajari dari
+// pesan live WhatsApp (SenderAlt dari HP utama). Idempoten.
+func RecordSenderAlias(agentID uint, lid, pn string) {
+	lid = strings.TrimSpace(lid)
+	pn = NormalizePhone(strings.TrimSpace(pn))
+	if agentID == 0 || lid == "" || pn == "" || !LooksLikeLID(lid) {
+		return
+	}
+	var existing models.SenderAlias
+	err := database.DB.Where("agent_id = ? AND lid = ?", agentID, lid).First(&existing).Error
+	if err == nil {
+		if existing.PN != pn {
+			database.DB.Model(&existing).Update("pn", pn)
+		}
+		return
+	}
+	database.DB.Create(&models.SenderAlias{AgentID: agentID, LID: lid, PN: pn})
 }
 
 // LooksLikeLID = kandidat identitas LID WhatsApp (bukan nomor telepon):

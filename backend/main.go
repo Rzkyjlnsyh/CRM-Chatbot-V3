@@ -339,7 +339,6 @@ func main() {
 			auth.POST("/agents/:id/inbox/reset", handlers.RequireTenantAdmin(), handlers.ResetAgentInbox)
 			auth.GET("/agents/:id/inbox/unread-summary", handlers.InboxUnreadSummary)
 			auth.GET("/agents/:id/link-preview", handlers.LinkPreview)
-			auth.GET("/agents/:id/profile-picture", handlers.ServeProfilePicture)
 			auth.POST("/agents/:id/inbox/client-debug", handlers.InboxClientDebug)
 			auth.GET("/agents/:id/inbox/client-debug", handlers.InboxClientDebugDump)
 		}

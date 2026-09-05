@@ -54,9 +54,9 @@ func touchInboxLastMsg(agentID uint, sender string, ts time.Time) {
 	// Tanpa ini, kontak yang sama muncul dua kali di sidebar (PN + LID) dengan
 	// riwayat terpecah & pratinjau salah (fenomena nyata dari WA pribadi).
 	if services.LooksLikeLID(sender) {
-		if pn := services.WA(agentID).PNForLID(sender); pn != "" {
-			healSenderIdentity(agentID, sender, services.NormalizePhone(pn))
-			sender = services.NormalizePhone(pn)
+		if pn := resolveSenderAliasPN(agentID, sender); pn != "" {
+			healSenderIdentity(agentID, sender, pn)
+			sender = pn
 		}
 	}
 	if ts.IsZero() {

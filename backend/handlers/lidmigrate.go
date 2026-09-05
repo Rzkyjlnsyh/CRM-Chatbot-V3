@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"log"
+	"strings"
 
 	"wa-assistant/backend/database"
 	"wa-assistant/backend/models"
@@ -12,6 +13,26 @@ import (
 // jadi nomor telepon asli (pakai pemetaan LID->PN milik whatsmeow). Idempoten —
 // setelah semua terkonversi, panggilan berikutnya tidak menemukan kandidat lagi.
 // Dipanggil saat agent tersambung (store & pemetaan LID sudah siap).
+// recordSenderAlias disimpan di services (services.RecordSenderAlias).
+
+// resolveSenderAliasPN mencari nomor asli untuk identitas LID:
+// 1) tabel alias yang dipelajari (paling akurat — dari SenderAlt HP),
+// 2) store whatsmeow (LIDs.GetPNForLID).
+func resolveSenderAliasPN(agentID uint, lid string) string {
+	lid = strings.TrimSpace(lid)
+	if lid == "" {
+		return ""
+	}
+	var alias models.SenderAlias
+	if err := database.DB.Where("agent_id = ? AND lid = ?", agentID, lid).First(&alias).Error; err == nil && alias.PN != "" {
+		return services.NormalizePhone(alias.PN)
+	}
+	if pn := services.WA(agentID).PNForLID(lid); pn != "" {
+		return services.NormalizePhone(pn)
+	}
+	return ""
+}
+
 // healSenderIdentity menyatukan identitas ganda (LID → nomor asli) di semua
 // tabel data kontak. Tidak menghapus pesan — hanya mengganti kunci identitas.
 // Dipanggil secara kontinu setiap kali aktivitas dari LID tersentuh, sehingga
@@ -30,7 +51,7 @@ func healSenderIdentity(agentID uint, lid, pn string) {
 }
 
 func migrateLIDSenders(agentID uint) {
-	wa := services.WA(agentID)
+	_ = services.WA(agentID) // store WA tetap dihangatkan (pemetaan LID siap)
 
 	candidates := map[string]bool{}
 	addDistinct := func(model interface{}, col string) {
@@ -49,7 +70,7 @@ func migrateLIDSenders(agentID uint) {
 
 	mapping := map[string]string{}
 	for v := range candidates {
-		if pn := wa.PNForLID(v); pn != "" && pn != v {
+		if pn := resolveSenderAliasPN(agentID, v); pn != "" && pn != v {
 			mapping[v] = pn
 		}
 	}

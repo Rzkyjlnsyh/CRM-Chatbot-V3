@@ -94,6 +94,7 @@ func Init() {
 		&models.InboxReadState{},
 		&models.UserAgentAssignment{},
 		&models.CSActivityLog{},
+		&models.SenderAlias{},
 	)
 
 	backfillKnowledgeCharCount()
