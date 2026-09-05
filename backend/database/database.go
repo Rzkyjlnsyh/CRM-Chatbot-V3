@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"time"
+
 	"wa-assistant/backend/config"
 	"wa-assistant/backend/models"
 
@@ -12,9 +13,24 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 var DB *gorm.DB
+
+// gormLogger = logger yang TENANG: tidak melog "record not found" (normal),
+// hanya memperingatkan query lambat > 500ms & error nyata. Console tidak lagi
+// penuh spam yang terlihat seperti error.
+func gormLogger() logger.Interface {
+	return logger.New(
+		log.New(os.Stdout, "\r\n", log.LstdFlags),
+		logger.Config{
+			SlowThreshold:             500 * time.Millisecond,
+			LogLevel:                  logger.Warn,
+			IgnoreRecordNotFoundError: true,
+		},
+	)
+}
 
 func Init() {
 	// Coba MySQL dulu, fallback ke SQLite kalau MySQL tidak tersedia
@@ -34,7 +50,7 @@ func Init() {
 		}
 
 		rootDSN := fmt.Sprintf("%s:%s@tcp(%s:%s)/?charset=utf8mb4&parseTime=True&loc=Local", user, pass, host, port)
-		if rootDB, rootErr := gorm.Open(mysql.Open(rootDSN), &gorm.Config{}); rootErr == nil {
+		if rootDB, rootErr := gorm.Open(mysql.Open(rootDSN), &gorm.Config{Logger: gormLogger()}); rootErr == nil {
 			rootDB.Exec("CREATE DATABASE IF NOT EXISTS `" + name + "` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
 			if sqlDB, e := rootDB.DB(); e == nil {
 				sqlDB.Close()
@@ -42,7 +58,7 @@ func Init() {
 		}
 
 		dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=True&loc=Local", user, pass, host, port, name)
-		DB, err = gorm.Open(mysql.Open(dsn), &gorm.Config{})
+		DB, err = gorm.Open(mysql.Open(dsn), &gorm.Config{Logger: gormLogger()})
 		if err == nil {
 			log.Println("Database: MySQL connected")
 			if sqlDB, e := DB.DB(); e == nil {
@@ -59,7 +75,7 @@ func Init() {
 			log.Printf("MySQL unavailable (%v) — fallback ke SQLite", err)
 		}
 		dbPath := config.Env("DB_PATH", "./wa-assistant.db")
-		DB, err = gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
+		DB, err = gorm.Open(sqlite.Open(dbPath), &gorm.Config{Logger: gormLogger()})
 		if err != nil {
 			log.Fatal("Database error (SQLite): ", err)
 		}
@@ -100,13 +116,14 @@ func Init() {
 	backfillKnowledgeCharCount()
 	backfillInboxLastMsgAt()
 
-	// Index performa (idempoten — error duplicate diabaikan): percakapan &
-	// sidebar sering di-query per (agent, sender); tanpa index, buka chat
-	// memindai seluruh tabel riwayat (lemot saat data besar).
+	// Index performa (idempoten, SENYAP — cek keberadaan dulu agar console
+	// tidak menampilkan error duplicate): percakapan & sidebar sering di-query
+	// per (agent, sender); tanpa index, buka chat memindai seluruh tabel.
 	ensureIndex := func(name, table, cols string) {
-		if err := DB.Exec("CREATE INDEX " + name + " ON " + table + " " + cols).Error; err != nil {
-			// MySQL 1061 / SQLite "already exists" — tidak masalah.
+		if DB.Migrator().HasIndex(table, name) {
+			return
 		}
+		_ = DB.Exec("CREATE INDEX " + name + " ON " + table + " " + cols).Error
 	}
 	ensureIndex("idx_ch_agent_sender", "chat_histories", "(agent_id, sender, id)")
 	ensureIndex("idx_ch_agent_sender_created", "chat_histories", "(agent_id, sender, created_at)")

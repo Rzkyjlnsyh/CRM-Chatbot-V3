@@ -47,18 +47,30 @@ func normalizedSenderFieldValue(value string) (string, bool) {
 
 // normalizeSenderFields memperbaiki sender personal yang mungkin tersimpan
 // dengan format JID (@s.whatsapp.net) atau nomor yang belum ternormalisasi.
-// JID grup sengaja dipertahankan utuh.
+// JID grup sengaja dipertahankan utuh. Tabel tanpa kolom `sender` dilewati
+// otomatis (hindari error "unknown column" di console).
 func normalizeSenderFields() {
 	type senderPair struct{ Old, New string }
 	var pairs []senderPair
 
 	seen := make(map[string]struct{})
-	for _, table := range []string{
-		"chat_histories", "inbox_read_states", "handoffs",
-		"conversation_memories", "ai_turns", "follow_ups",
-	} {
+	tables := []struct {
+		table string
+		model interface{}
+	}{
+		{"chat_histories", &models.ChatHistory{}},
+		{"inbox_read_states", &models.InboxReadState{}},
+		{"handoffs", &models.Handoff{}},
+		{"conversation_memories", &models.ConversationMemory{}},
+		{"ai_turns", &models.AITurn{}},
+		{"follow_ups", &models.FollowUp{}},
+	}
+	for _, t := range tables {
+		if !DB.Migrator().HasColumn(t.model, "sender") {
+			continue // tabel ini tidak menyimpan sender (mis. follow_ups)
+		}
 		var values []string
-		DB.Table(table).Distinct("sender").Where("sender LIKE ?", "%@%").Pluck("sender", &values)
+		DB.Table(t.table).Distinct("sender").Where("sender LIKE ?", "%@%").Pluck("sender", &values)
 		for _, v := range values {
 			if _, ok := seen[v]; ok {
 				continue
@@ -76,8 +88,11 @@ func normalizeSenderFields() {
 			log.Printf("[canonical] gagal normalisasi sender chat_histories %q: %v", pair.Old, affected.Error)
 			continue
 		}
-		for _, table := range []string{"inbox_read_states", "handoffs", "conversation_memories", "ai_turns", "follow_ups"} {
-			_ = DB.Table(table).Where("sender = ?", pair.Old).Update("sender", pair.New).Error
+		for _, t := range tables {
+			if !DB.Migrator().HasColumn(t.model, "sender") {
+				continue
+			}
+			_ = DB.Table(t.table).Where("sender = ?", pair.Old).Update("sender", pair.New).Error
 		}
 	}
 }
@@ -216,13 +231,29 @@ func EnsureCanonicalChatMessageIDs() error {
 		log.Printf("[canonical] dedup pesan: %d baris digabung, %d duplikat dihapus", totalMerged, totalDeleted)
 	}
 
-	// 2) Partial unique index: cegah duplikat wa_msg_id sejak sekarang.
+	// 2) Kunci anti-dobel — DIALECT-AWARE (senyap, tanpa error di console):
+	//    - SQLite: partial unique index (dukung WHERE + IF NOT EXISTS).
+	//    - MySQL: partial index TIDAK didukung → pasang index biasa untuk
+	//      performa dedup (pembersih duplikat di atas tetap jadi penjaga).
+	//    - Lainnya (PostgreSQL/Turso): partial unique index seperti SQLite.
+	indexName := "idx_chat_wa_msg_unique"
+	if DB.Migrator().HasIndex("chat_histories", indexName) {
+		return nil
+	}
+	dialect := DB.Dialector.Name()
+	if dialect == "mysql" {
+		if !DB.Migrator().HasIndex("chat_histories", "idx_chat_wa_msg_lookup") {
+			_ = DB.Exec("CREATE INDEX idx_chat_wa_msg_lookup ON chat_histories (agent_id, wa_msg_id)").Error
+		}
+		return nil
+	}
 	if err := DB.Exec(`
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_wa_msg_unique
 		ON chat_histories (agent_id, wa_msg_id)
 		WHERE wa_msg_id IS NOT NULL AND TRIM(wa_msg_id) != ''
 	`).Error; err != nil {
-		return fmt.Errorf("gagal memasang unique index pesan: %w", err)
+		// Jangan memblokir startup karena index opsional — dedup jalan terus.
+		log.Printf("[canonical] pengunci index dilewati: %v", err)
 	}
 	return nil
 }
