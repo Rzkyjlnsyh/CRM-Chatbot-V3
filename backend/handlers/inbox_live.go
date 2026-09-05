@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"io"
 	"net"
 	"net/http"
@@ -147,7 +148,10 @@ func ServeProfilePicture(c *gin.Context) {
 		c.JSON(404, gin.H{"error": "Agent tidak ditemukan"})
 		return
 	}
-	url, err := services.WA(agentID).ProfilePictureURL(c.Request.Context(), sender)
+	// Batasi waktu tunggu WA (jangan sampai request menggantung lama).
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 8*time.Second)
+	defer cancel()
+	url, err := services.WA(agentID).ProfilePictureURL(ctx, sender)
 	if err != nil || url == "" {
 		c.JSON(404, gin.H{"error": "Foto profil tidak tersedia"})
 		return
