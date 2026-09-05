@@ -27,12 +27,28 @@ func migrateLIDSenders(agentID uint) {
 	addDistinct(&models.Handoff{}, "sender")
 	addDistinct(&models.OptOut{}, "sender")
 	addDistinct(&models.Contact{}, "number")
+	addDistinct(&models.InboxReadState{}, "sender")
+	addDistinct(&models.ConversationRead{}, "sender")
 
 	mapping := map[string]string{}
 	for v := range candidates {
 		if pn := wa.PNForLID(v); pn != "" && pn != v {
 			mapping[v] = pn
 		}
+	}
+	// Junk LID yang TIDAK bisa dipetakan: hapus dari inbox_read_states &
+	// conversation_reads agar daftar chat tidak menampilkan "nomor" aneh.
+	// (Tabel riwayat chat dibiarkan — tidak ada baris chat di bawahnya
+	// biasanya; data tidak dihancurkan membabi buta.)
+	for v := range candidates {
+		if !services.LooksLikeLID(v) {
+			continue
+		}
+		if _, ok := mapping[v]; ok {
+			continue
+		}
+		database.DB.Where("agent_id = ? AND sender = ?", agentID, v).Delete(&models.InboxReadState{})
+		database.DB.Where("agent_id = ? AND sender = ?", agentID, v).Delete(&models.ConversationRead{})
 	}
 	if len(mapping) == 0 {
 		return
@@ -45,6 +61,8 @@ func migrateLIDSenders(agentID uint) {
 		mergeLIDState(&models.Handoff{}, "sender", agentID, lid, pn)
 		mergeLIDState(&models.OptOut{}, "sender", agentID, lid, pn)
 		mergeLIDState(&models.Contact{}, "number", agentID, lid, pn)
+		mergeLIDState(&models.InboxReadState{}, "sender", agentID, lid, pn)
+		mergeLIDState(&models.ConversationRead{}, "sender", agentID, lid, pn)
 	}
 	log.Printf("Rapikan LID (agent %d): %d pengirim LID diubah ke nomor telepon", agentID, len(mapping))
 }

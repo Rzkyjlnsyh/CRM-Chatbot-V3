@@ -143,6 +143,15 @@ func (w *waInstance) processHistorySync(payload *waHistorySync.HistorySync, deep
 
 		// Ekstrak chat state dari metadata conversation (v4: unread, marked unread, timestamp).
 		sender := NormalizeInboxSender(conv.GetID())
+		if sender != "" && LooksLikeLID(sender) {
+			// Identitas LID → petakan ke nomor asli; bila belum ada pemetaan,
+			// lewati (jangan simpan angka LID sebagai nomor palsu).
+			if pn := w.PNForLID(sender); pn != "" {
+				sender = NormalizePhone(pn)
+			} else {
+				sender = ""
+			}
+		}
 		if sender != "" && onHistoryChatState != nil {
 			unread := int(conv.GetUnreadCount())
 			if unread < 0 {
@@ -277,6 +286,15 @@ func unwrapHistoryMessage(w *waInstance, conv *waHistorySync.Conversation, msgEv
 		return HistoricalMessage{}, false
 	}
 	sender := NormalizePhone(remote)
+	if LooksLikeLID(sender) {
+		// Identitas LID di riwayat → petakan ke nomor asli; tanpa pemetaan,
+		// lewati agar tidak menyimpan angka LID sebagai nomor palsu.
+		if pn := w.PNForLID(sender); pn != "" {
+			sender = NormalizePhone(pn)
+		} else {
+			return HistoricalMessage{}, false
+		}
+	}
 	msg := msgEvt.GetMessage()
 	if msg == nil {
 		return HistoricalMessage{}, false

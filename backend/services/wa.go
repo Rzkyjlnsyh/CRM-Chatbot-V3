@@ -649,8 +649,12 @@ func (w *waInstance) handleEvent(evt interface{}) {
 		// Kontak modern bisa beralamat LID (privasi). Pakai nomor telepon asli (SenderAlt)
 		// agar yang tersimpan & ditampilkan adalah nomor WA betulan, bukan angka LID.
 		contact := v.Info.Sender
-		if contact.Server == types.HiddenUserServer && !v.Info.SenderAlt.IsEmpty() {
-			contact = v.Info.SenderAlt
+		if contact.Server == types.HiddenUserServer {
+			if !v.Info.SenderAlt.IsEmpty() {
+				contact = v.Info.SenderAlt
+			} else if pn := w.PNForLID(contact.User); pn != "" {
+				contact = types.NewJID(pn, types.DefaultUserServer)
+			}
 		}
 		Go("onMessage", func() { onMessage(w.agentID, contact, in) })
 	}
@@ -853,11 +857,34 @@ func NormalizePhone(s string) string {
 		return ""
 	case strings.HasPrefix(d, "0"):
 		return "62" + d[1:]
-	case strings.HasPrefix(d, "8"): // nomor lokal tanpa awalan 0/62
-		return "62" + d
+	case strings.HasPrefix(d, "62") && len(d) >= 11 && len(d) <= 14:
+		return d
+	case strings.HasPrefix(d, "8"):
+		return "628" + d[1:]
 	default:
+		// Bukan pola nomor Indonesia (mis. LID) — kembalikan digit apa adanya;
+		// pemanggil bertanggung jawab memetakan LID ke nomor asli.
 		return d
 	}
+}
+
+// LooksLikeLID = kandidat identitas LID WhatsApp (bukan nomor telepon):
+// deretan digit yang TIDAK dimulai 62 dengan panjang >= 13, atau dimulai 62
+// tapi terlalu panjang (>= 15) untuk nomor Indonesia.
+func LooksLikeLID(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	if strings.HasPrefix(s, "62") {
+		return len(s) >= 15
+	}
+	return len(s) >= 13
 }
 
 // ValidatePhoneForWA menilai apakah nomor (setelah dinormalisasi) laik untuk dikirimi
