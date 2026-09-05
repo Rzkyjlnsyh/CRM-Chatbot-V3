@@ -7,6 +7,7 @@ import (
 
 	"wa-assistant/backend/database"
 	"wa-assistant/backend/models"
+	"wa-assistant/backend/services"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -48,10 +49,25 @@ func touchInboxLastMsg(agentID uint, sender string, ts time.Time) {
 	if agentID == 0 || sender == "" {
 		return
 	}
+	// Penyatuan identitas (pola v4): bila pengirim adalah LID & pemetaan ke nomor
+	// asli sudah ada, seluruh data kontak ini dirapikan ke SATU identitas.
+	// Tanpa ini, kontak yang sama muncul dua kali di sidebar (PN + LID) dengan
+	// riwayat terpecah & pratinjau salah (fenomena nyata dari WA pribadi).
+	if services.LooksLikeLID(sender) {
+		if pn := services.WA(agentID).PNForLID(sender); pn != "" {
+			healSenderIdentity(agentID, sender, services.NormalizePhone(pn))
+			sender = services.NormalizePhone(pn)
+		}
+	}
 	if ts.IsZero() {
 		ts = time.Now()
 	} else {
 		ts = ts.UTC()
+		// Stempel waktu mustahil (masa depan jauh / sebelum 2000) = data korup;
+		// jangan sampai menggeser urutan sidebar.
+		if ts.After(time.Now().Add(10*time.Minute)) || ts.Year() < 2000 {
+			ts = time.Now()
+		}
 	}
 	ts = ts.Truncate(time.Millisecond)
 	if err := ensureInboxReadState(agentID, sender); err != nil {

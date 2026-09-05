@@ -600,8 +600,12 @@ func (w *waInstance) handleEvent(evt interface{}) {
 					in.WAMsgID = msgID
 					in.Timestamp = v.Info.Timestamp
 					recipient := v.Info.Chat
-					if recipient.Server == types.HiddenUserServer && !v.Info.RecipientAlt.IsEmpty() {
-						recipient = v.Info.RecipientAlt
+					if recipient.Server == types.HiddenUserServer {
+						if !v.Info.RecipientAlt.IsEmpty() {
+							recipient = v.Info.RecipientAlt
+						} else if pn := w.PNForLID(recipient.User); pn != "" {
+							recipient = types.NewJID(pn, types.DefaultUserServer)
+						}
 					}
 					Go("onOwnMessage", func() { onOwnMessage(w.agentID, recipient, in) })
 				}

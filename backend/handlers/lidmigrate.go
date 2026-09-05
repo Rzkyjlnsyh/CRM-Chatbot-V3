@@ -12,6 +12,23 @@ import (
 // jadi nomor telepon asli (pakai pemetaan LID->PN milik whatsmeow). Idempoten —
 // setelah semua terkonversi, panggilan berikutnya tidak menemukan kandidat lagi.
 // Dipanggil saat agent tersambung (store & pemetaan LID sudah siap).
+// healSenderIdentity menyatukan identitas ganda (LID → nomor asli) di semua
+// tabel data kontak. Tidak menghapus pesan — hanya mengganti kunci identitas.
+// Dipanggil secara kontinu setiap kali aktivitas dari LID tersentuh, sehingga
+// pecahan identitas apa pun otomatis tersatukan (tanpa menunggu reconnect).
+func healSenderIdentity(agentID uint, lid, pn string) {
+	database.DB.Model(&models.ChatHistory{}).
+		Where("agent_id = ? AND sender = ?", agentID, lid).
+		Update("sender", pn)
+	// Tabel status satu-baris-per-kontak: gabungkan (bila baris PN sudah ada,
+	// baris LID dihapus — mergeLIDState melakukan itu tanpa bentrok unik).
+	mergeLIDState(&models.InboxReadState{}, "sender", agentID, lid, pn)
+	mergeLIDState(&models.ConversationRead{}, "sender", agentID, lid, pn)
+	mergeLIDState(&models.Handoff{}, "sender", agentID, lid, pn)
+	mergeLIDState(&models.OptOut{}, "sender", agentID, lid, pn)
+	mergeLIDState(&models.Contact{}, "number", agentID, lid, pn)
+}
+
 func migrateLIDSenders(agentID uint) {
 	wa := services.WA(agentID)
 

@@ -145,6 +145,49 @@ function avatarColor(seed: string) {
   return colors[h % colors.length];
 }
 
+/** URL foto profil (pola v4): <img> memakai ?token= karena tidak bisa header auth. */
+function profilePictureURL(agentId: number, sender: string, token: string) {
+  if (!agentId || !sender || !token) return undefined;
+  return `/api/agents/${agentId}/profile-picture?sender=${encodeURIComponent(sender)}&token=${encodeURIComponent(token)}`;
+}
+
+/** Avatar kontak: foto profil WA bila tersedia; inisial sebagai fallback. */
+const LazyContactAvatar = memo(function LazyContactAvatar({
+  agentId, sender, label, isGroup,
+}: {
+  agentId: number;
+  sender: string;
+  label: string;
+  isGroup: boolean;
+}) {
+  const [src, setSrc] = useState<string | undefined>(undefined);
+  const [failed, setFailed] = useState(false);
+  const token = typeof localStorage !== 'undefined' ? localStorage.getItem('token') || '' : '';
+  useEffect(() => {
+    setSrc(undefined);
+    setFailed(false);
+    if (isGroup || !token) return;
+    const url = profilePictureURL(agentId, sender, token);
+    if (!url) return;
+    let cancel = false;
+    const img = new Image();
+    img.onload = () => { if (!cancel) setSrc(url); };
+    img.onerror = () => { if (!cancel) setFailed(true); };
+    img.src = url;
+    return () => { cancel = true; };
+  }, [agentId, sender, isGroup, token]);
+  if (src && !failed) {
+    return (
+      <Avatar src={src} sx={{ width: 49, height: 49, fontSize: 18, fontWeight: 600, bgcolor: avatarColor(sender), color: '#fff', flexShrink: 0 }} />
+    );
+  }
+  return (
+    <Avatar sx={{ width: 49, height: 49, fontSize: 18, fontWeight: 600, bgcolor: avatarColor(sender), color: '#fff', flexShrink: 0 }}>
+      {label}
+    </Avatar>
+  );
+});
+
 /* ─── Bubble (memo) ─────────────────────────────────────────────────────── */
 
 const Bubble = memo(function Bubble({
@@ -453,13 +496,14 @@ function labelHex(c: string): string {
 /* ─── Contact row (memo) ────────────────────────────────────────────────── */
 
 const ContactRow = memo(function ContactRow({
-  ct, selected, onSelect, onDelete, deleting,
+  ct, selected, onSelect, onDelete, deleting, agentId,
 }: {
   ct: Contact;
   selected: boolean;
   onSelect: (sender: string) => void;
   onDelete: (sender: string) => void;
   deleting?: boolean;
+  agentId: number;
 }) {
   const label = ct.name || `+${ct.sender}`;
   const initial = label.charAt(0).toUpperCase();
@@ -496,19 +540,7 @@ const ContactRow = memo(function ContactRow({
           cursor: 'pointer',
         }}
       >
-        <Avatar
-          sx={{
-            width: 49,
-            height: 49,
-            fontSize: 18,
-            fontWeight: 600,
-            bgcolor: avatarColor(ct.sender),
-            color: '#fff',
-            flexShrink: 0,
-          }}
-        >
-          {initial}
-        </Avatar>
+        <LazyContactAvatar agentId={agentId} sender={ct.sender} label={initial} isGroup={ct.sender.includes('@g.us')} />
         <Box sx={{ minWidth: 0, flex: 1, border: 0 }}>
           <Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'baseline', gap: 1, mb: 0.2 }}>
             <Typography noWrap sx={{ fontWeight: (ct.unread_count ?? 0) > 0 ? 800 : 500, fontSize: 16, color: '#111b21', lineHeight: 1.25 }}>
@@ -1199,15 +1231,19 @@ export default function InboxPanel({
   }, [convo]);
 
   const filteredContacts = useMemo(() => {
-    const list = contacts || [];
-    const q = search.trim().toLowerCase();
-    if (!q) return list;
-    return list.filter((c) => {
-      const name = (c.name || '').toLowerCase();
-      const num = c.sender.toLowerCase();
-      const msg = (c.last_msg || '').toLowerCase();
-      return name.includes(q) || num.includes(q) || msg.includes(q);
-    });
+  const list = contacts || [];
+  const q = search.trim().toLowerCase();
+  if (!q) return list;
+  // Pencarian nomor tahan ragam format: '+62...', '08...', '62...' — bandingkan
+  // digit murni sehingga mengetik sebagian nomor pun tetap ketemu.
+  const qDigits = q.replace(/[^0-9]/g, '');
+  return list.filter((c) => {
+  const name = (c.name || '').toLowerCase();
+  const num = c.sender.toLowerCase();
+  const numDigits = c.sender.replace(/[^0-9]/g, '');
+  const msg = (c.last_msg || '').toLowerCase();
+  return name.includes(q) || num.includes(q) || (qDigits.length > 0 && numDigits.includes(qDigits)) || msg.includes(q);
+  });
   }, [contacts, search]);
 
   const replyLookup = useMemo(() => {
@@ -1466,6 +1502,7 @@ export default function InboxPanel({
                   onSelect={selectContact}
                   onDelete={(s) => { void deleteConversation(s); }}
                   deleting={deletingSender === ct.sender}
+                  agentId={agentId}
                 />
               ))
             )}

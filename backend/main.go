@@ -104,6 +104,7 @@ func main() {
 		api.GET("/agents/:id/media/:cid", handlers.ServeMedia)
 		api.GET("/agents/:id/products/:pid/image", handlers.ServeProductImage)
 		api.GET("/agents/:id/media-assets/:assetId/file", handlers.ServeMediaAssetFile)
+		api.GET("/agents/:id/profile-picture", handlers.ServeProfilePicture)
 		api.GET("/me", handlers.AuthMiddleware(), handlers.Me)
 		api.PUT("/profile", handlers.AuthMiddleware(), handlers.UpdateProfile)
 		api.PUT("/change-password", handlers.AuthMiddleware(), handlers.ChangePassword)

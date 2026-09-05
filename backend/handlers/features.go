@@ -210,11 +210,10 @@ func InboxContacts(c *gin.Context) {
 		LastMsg string     `gorm:"column:last_msg"`
 	}
 
-	// Query utama: join InboxReadState + latest chat_history untuk preview.
-	// CATATAN: jangan pakai COALESCE(rs.last_msg_at, ch.created_at) — SQLite
-	// mengembalikan STRING dan scan ke time.Time gagal (bug yang membuat
-	// handler diam-diam jatuh ke query legacy: unread 0 & filter label hilang).
-	// Dua kolom diambil terpisah dan digabung di Go.
+	// Sidebar (pola v4): sinkron dengan WA (dari HistorySync + event live) — preview
+	// diambil dari pesan yang benar-benar terbaru (per WAKTU WA, bukan per id insert).
+	// PENTING: import riwayat lama dari HP menulis ke tabel dengan id BARU sehingga
+	// MAX(id) bisa "menyalip" pesan asli hari ini → preview/urutan jadi salah.
 	baseSQL := `
 		SELECT
 			rs.sender,
@@ -229,8 +228,9 @@ func InboxContacts(c *gin.Context) {
 			END AS last_msg
 		FROM inbox_read_states rs
 		LEFT JOIN chat_histories ch ON ch.id = (
-			SELECT MAX(id) FROM chat_histories
-			WHERE agent_id = rs.agent_id AND sender = rs.sender
+			SELECT c2.id FROM chat_histories c2
+			WHERE c2.agent_id = rs.agent_id AND c2.sender = rs.sender
+			ORDER BY c2.created_at DESC, c2.id DESC LIMIT 1
 		)
 		WHERE rs.agent_id = ?`
 	args := []any{id}
@@ -262,10 +262,13 @@ func InboxContacts(c *gin.Context) {
 					WHEN TRIM(COALESCE(ch.reply,''))!='' THEN ch.reply
 					WHEN ch.media_type!='' THEN CONCAT('[',ch.media_type,']') ELSE '' END AS last_msg
 			FROM chat_histories ch
-			INNER JOIN (SELECT MAX(id) AS max_id FROM chat_histories WHERE agent_id=? GROUP BY sender) latest
-				ON ch.id=latest.max_id
-			WHERE ch.agent_id=?`
-		legacyArgs := []any{id, id}
+			WHERE ch.agent_id = ?
+			  AND ch.id = (
+				SELECT c2.id FROM chat_histories c2
+				WHERE c2.agent_id = ch.agent_id AND c2.sender = ch.sender
+				ORDER BY c2.created_at DESC, c2.id DESC LIMIT 1
+			  )`
+		legacyArgs := []any{id}
 		if labelFilter != "" {
 			legacySQL += ` AND ch.sender IN (SELECT sender FROM chat_labels WHERE agent_id = ? AND label_id = ?)`
 			legacyArgs = append(legacyArgs, id, labelFilter)

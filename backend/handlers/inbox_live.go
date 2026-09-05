@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"wa-assistant/backend/database"
+	"wa-assistant/backend/models"
 	"wa-assistant/backend/services"
 
 	"github.com/gin-gonic/gin"
@@ -129,6 +131,18 @@ func ServeProfilePicture(c *gin.Context) {
 		return
 	}
 	agentID := currentAgentID(c)
+	if agentID == 0 {
+		// <img> tidak bisa mengirim header Authorization → dukung ?token=
+		// (JWT login / media token, seperti endpoint media lainnya).
+		if tid, ok := tenantFromToken(c.Query("token")); ok {
+			var agent models.Agent
+			if err := database.DB.Select("id").
+				Where("id = ? AND tenant_id = ?", c.Param("id"), tid).
+				First(&agent).Error; err == nil {
+				agentID = agent.ID
+			}
+		}
+	}
 	if agentID == 0 {
 		c.JSON(404, gin.H{"error": "Agent tidak ditemukan"})
 		return
