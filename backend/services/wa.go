@@ -855,15 +855,18 @@ func NormalizePhone(s string) string {
 	switch {
 	case d == "":
 		return ""
-	case strings.HasPrefix(d, "0"):
+	case strings.HasPrefix(d, "0") && len(d) >= 5 && len(d) <= 13:
+		// Nomor lokal Indonesia (08xx / format pendek): 5–13 digit.
 		return "62" + d[1:]
 	case strings.HasPrefix(d, "62") && len(d) >= 11 && len(d) <= 14:
 		return d
-	case strings.HasPrefix(d, "8"):
+	case strings.HasPrefix(d, "8") && len(d) >= 8 && len(d) <= 12:
+		// Nomor lokal Indonesia tanpa 0/62 (8xx): 8–12 digit.
+		// 13+ digit berawalan 8 = nomor asing (86 China, 880 Bangladesh, dll).
 		return "628" + d[1:]
 	default:
-		// Bukan pola nomor Indonesia (mis. LID) — kembalikan digit apa adanya;
-		// pemanggil bertanggung jawab memetakan LID ke nomor asli.
+		// Bukan pola nomor Indonesia (LID, grup, nomor asing) —
+		// kembalikan digit apa adanya, JANGAN dipaksa jadi 62xx.
 		return d
 	}
 }
