@@ -231,6 +231,10 @@ func OnWAOwnMessage(agentID uint, recipient types.JID, in services.IncomingMessa
 	}).Error; err != nil {
 		log.Printf("Gagal mencatat balasan manual perangkat (agent %d, %s): %v", agentID, num, err)
 	}
+	// Sidebar: pesan KELUAR dari perangkat juga harus menaikkan percakapan ke
+	// atas daftar (pola v4). Tanpa ini, chat dari HP tidak bergeser ke atas
+	// sampai percakapan dibuka.
+	touchInboxLastMsg(agentID, num, createdAt)
 	PublishInboxEvent(agentID, "state", num, in.WAMsgID)
 	// Real-time learning: balasan CS manusia baru = materi belajar terbaru.
 	services.MaybeTriggerIncrementalLearning(agentID)

@@ -8,8 +8,8 @@ import (
 	"wa-assistant/backend/config"
 	"wa-assistant/backend/models"
 
-	"golang.org/x/crypto/bcrypt"
 	sqlite "github.com/glebarez/sqlite"
+	"golang.org/x/crypto/bcrypt"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 )
@@ -98,6 +98,18 @@ func Init() {
 
 	backfillKnowledgeCharCount()
 	backfillInboxLastMsgAt()
+
+	// Index performa (idempoten — error duplicate diabaikan): percakapan &
+	// sidebar sering di-query per (agent, sender); tanpa index, buka chat
+	// memindai seluruh tabel riwayat (lemot saat data besar).
+	ensureIndex := func(name, table, cols string) {
+		if err := DB.Exec("CREATE INDEX " + name + " ON " + table + " " + cols).Error; err != nil {
+			// MySQL 1061 / SQLite "already exists" — tidak masalah.
+		}
+	}
+	ensureIndex("idx_ch_agent_sender", "chat_histories", "(agent_id, sender, id)")
+	ensureIndex("idx_ch_agent_sender_created", "chat_histories", "(agent_id, sender, created_at)")
+	ensureIndex("idx_irs_agent_sender", "inbox_read_states", "(agent_id, sender)")
 	recoverStuckCrawlJobs()
 	seedSuperAdmin()
 	seedDefaultTenant()
@@ -153,9 +165,9 @@ func backfillInboxLastMsgAt() {
 
 	// Query: cari pasangan (agent_id, sender) dengan created_at terbaru dari chat_histories.
 	type latestMsg struct {
-		AgentID   uint
-		Sender    string
-		LatestAt  time.Time
+		AgentID  uint
+		Sender   string
+		LatestAt time.Time
 	}
 	var rows []latestMsg
 	DB.Raw(`
