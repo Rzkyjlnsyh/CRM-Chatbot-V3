@@ -869,8 +869,8 @@ func NormalizePhone(s string) string {
 }
 
 // LooksLikeLID = kandidat identitas LID WhatsApp (bukan nomor telepon):
-// deretan digit yang TIDAK dimulai 62 dengan panjang >= 13, atau dimulai 62
-// tapi terlalu panjang (>= 15) untuk nomor Indonesia.
+// deretan digit dengan panjang 13–17. Batas atas 17 penting agar ID grup
+// (18+ digit, kadang tersimpan tanpa @g.us di fork ini) TIDAK dikira LID.
 func LooksLikeLID(s string) bool {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -882,9 +882,9 @@ func LooksLikeLID(s string) bool {
 		}
 	}
 	if strings.HasPrefix(s, "62") {
-		return len(s) >= 15
+		return len(s) >= 15 && len(s) <= 17
 	}
-	return len(s) >= 13
+	return len(s) >= 13 && len(s) <= 17
 }
 
 // ValidatePhoneForWA menilai apakah nomor (setelah dinormalisasi) laik untuk dikirimi
