@@ -2,12 +2,14 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"wa-assistant/backend/database"
@@ -125,6 +127,16 @@ func firstMatch(re *regexp.Regexp, s string) string {
 
 // ServeProfilePicture — GET /agents/:id/profile-picture?sender=...
 // Redirect ke URL thumbnail WA (klien <img> tanpa header auth).
+// CACHE ringan (pola v4): positif 30 menit, negatif 10 menit — WhatsApp
+// membatasi permintaan foto profil, jadi tanpa cache request berulang akan
+// membanjiri WA dan console penuh 404.
+type ppCacheEntry struct {
+	URL       string
+	ExpiresAt time.Time
+}
+
+var ppCache sync.Map
+
 func ServeProfilePicture(c *gin.Context) {
 	sender := strings.TrimSpace(c.Query("sender"))
 	if sender == "" {
@@ -148,14 +160,34 @@ func ServeProfilePicture(c *gin.Context) {
 		c.JSON(404, gin.H{"error": "Agent tidak ditemukan"})
 		return
 	}
+
+	key := fmt.Sprintf("%d:%s", agentID, sender)
+	if cached, found := ppCache.Load(key); found {
+		entry := cached.(ppCacheEntry)
+		if time.Now().Before(entry.ExpiresAt) {
+			if entry.URL == "" {
+				// Foto tidak tersedia (diketahui) — 204 agar <img> fallback
+				// ke inisial TANPA menambah error di console browser.
+				c.Status(http.StatusNoContent)
+			} else {
+				c.Header("Cache-Control", "private, max-age=1800")
+				c.Redirect(http.StatusFound, entry.URL)
+			}
+			return
+		}
+		ppCache.Delete(key)
+	}
+
 	// Batasi waktu tunggu WA (jangan sampai request menggantung lama).
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 8*time.Second)
 	defer cancel()
 	url, err := services.WA(agentID).ProfilePictureURL(ctx, sender)
 	if err != nil || url == "" {
-		c.JSON(404, gin.H{"error": "Foto profil tidak tersedia"})
+		ppCache.Store(key, ppCacheEntry{ExpiresAt: time.Now().Add(10 * time.Minute)})
+		c.Status(http.StatusNoContent)
 		return
 	}
-	c.Header("Cache-Control", "private, max-age=3600")
+	ppCache.Store(key, ppCacheEntry{URL: url, ExpiresAt: time.Now().Add(30 * time.Minute)})
+	c.Header("Cache-Control", "private, max-age=1800")
 	c.Redirect(http.StatusFound, url)
 }

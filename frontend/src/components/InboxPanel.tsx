@@ -151,7 +151,10 @@ function profilePictureURL(agentId: number, sender: string, token: string) {
   return `/api/agents/${agentId}/profile-picture?sender=${encodeURIComponent(sender)}&token=${encodeURIComponent(token)}`;
 }
 
-/** Avatar kontak: foto profil WA bila tersedia; inisial sebagai fallback. */
+/** Avatar kontak: foto profil WA bila tersedia; inisial sebagai fallback.
+ *  LAZY (pola v4): hanya diminta saat baris MASUK viewport — tanpa ini,
+ *  semua baris terlihat langsung meminta foto → WhatsApp membatasi (rate
+ *  limit) → console penuh 404. Grup & LID tidak diminta sama sekali. */
 const LazyContactAvatar = memo(function LazyContactAvatar({
   agentId, sender, label, isGroup,
 }: {
@@ -160,13 +163,37 @@ const LazyContactAvatar = memo(function LazyContactAvatar({
   label: string;
   isGroup: boolean;
 }) {
+  const ref = useRef<HTMLDivElement | null>(null);
   const [src, setSrc] = useState<string | undefined>(undefined);
   const [failed, setFailed] = useState(false);
+  const [active, setActive] = useState(false);
   const token = typeof localStorage !== 'undefined' ? localStorage.getItem('token') || '' : '';
+
+  // Grup tersimpan kadang tanpa @g.us → deteksi juga dari panjang ID (18+ digit).
+  const skip = isGroup || sender.replace(/\D/g, '').length >= 18 || !token;
+
   useEffect(() => {
-    setSrc(undefined);
-    setFailed(false);
-    if (isGroup || !token) return;
+    if (skip || active || !ref.current) return;
+    const el = ref.current;
+    if (typeof IntersectionObserver === 'undefined') {
+      setActive(true);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setActive(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: '200px' },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [skip, active]);
+
+  useEffect(() => {
+    if (skip || !active) return;
     const url = profilePictureURL(agentId, sender, token);
     if (!url) return;
     let cancel = false;
@@ -175,16 +202,19 @@ const LazyContactAvatar = memo(function LazyContactAvatar({
     img.onerror = () => { if (!cancel) setFailed(true); };
     img.src = url;
     return () => { cancel = true; };
-  }, [agentId, sender, isGroup, token]);
+  }, [agentId, sender, skip, active, token]);
+
   if (src && !failed) {
     return (
       <Avatar src={src} sx={{ width: 49, height: 49, fontSize: 18, fontWeight: 600, bgcolor: avatarColor(sender), color: '#fff', flexShrink: 0 }} />
     );
   }
   return (
-    <Avatar sx={{ width: 49, height: 49, fontSize: 18, fontWeight: 600, bgcolor: avatarColor(sender), color: '#fff', flexShrink: 0 }}>
-      {label}
-    </Avatar>
+    <Box ref={ref} sx={{ display: 'contents' }}>
+      <Avatar sx={{ width: 49, height: 49, fontSize: 18, fontWeight: 600, bgcolor: avatarColor(sender), color: '#fff', flexShrink: 0 }}>
+        {label}
+      </Avatar>
+    </Box>
   );
 });
 
