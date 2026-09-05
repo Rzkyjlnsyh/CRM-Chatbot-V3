@@ -87,15 +87,18 @@ type ReceiptMeta struct {
 type ReceiptHandler func(agentID uint, m ReceiptMeta)
 
 type waInstance struct {
-	mu             sync.Mutex
-	labelSyncMu    sync.Mutex
-	agentID        uint
-	client         *whatsmeow.Client
-	sentBySystem   map[string]time.Time // wa_msg_id → waktu kirim (dedup echo pesan sendiri)
-	qrCode         string
-	qrExpiry       time.Time // kapan kode QR saat ini akan diputar whatsmeow (untuk countdown akurat)
-	status         string    // "disconnected", "qr", "connecting", "connected", "expired", "pairing", "pair_error"
-	contactsSynced bool      // true setelah backfill nama kontak dari buku alamat (sekali per proses)
+	mu           sync.Mutex
+	labelSyncMu  sync.Mutex
+	agentID      uint
+	client       *whatsmeow.Client
+	sentBySystem map[string]time.Time // wa_msg_id → waktu kirim (dedup echo pesan sendiri)
+	qrCode       string
+	qrExpiry     time.Time // kapan kode QR saat ini akan diputar whatsmeow (untuk countdown akurat)
+	// Waiter history sync: kode yang menunggu hasil sinkronisasi (tombol Resync).
+	historyWaitersMu sync.Mutex
+	historyWaiters   map[string][]chan struct{}
+	status           string // "disconnected", "qr", "connecting", "connected", "expired", "pairing", "pair_error"
+	contactsSynced   bool   // true setelah backfill nama kontak dari buku alamat (sekali per proses)
 
 	// Jalur login via kode pairing (alternatif QR): user memasukkan kode 8 huruf di WA.
 	pairing   bool   // true bila sesi ini sedang dalam alur kode pairing (bukan QR)

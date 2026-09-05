@@ -13,6 +13,7 @@ import (
 	waHistorySync "go.mau.fi/whatsmeow/proto/waHistorySync"
 	waWeb "go.mau.fi/whatsmeow/proto/waWeb"
 	"go.mau.fi/whatsmeow/types"
+	"go.mau.fi/whatsmeow/types/events"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -171,10 +172,85 @@ func (w *waInstance) processHistorySync(payload *waHistorySync.HistorySync, deep
 	if len(chatStates) > 0 && onHistoryChatState != nil {
 		onHistoryChatState(w.agentID, chatStates)
 	}
+	for _, state := range chatStates {
+		w.notifyHistoryChatState(state.Sender)
+	}
+	// Sync penuh / on-demand = acknowledgment sah untuk request Resync aktif.
+	if st := payload.GetSyncType(); st == waHistorySync.HistorySync_ON_DEMAND || st == waHistorySync.HistorySync_FULL {
+		w.notifyAllHistoryWaiters()
+	}
 
 	return imported, skipped, nil
 }
 
+// addHistoryWaiter mendaftarkan penunggu hasil sinkronisasi untuk satu sender.
+func (w *waInstance) addHistoryWaiter(sender string) chan struct{} {
+	waiter := make(chan struct{})
+	w.historyWaitersMu.Lock()
+	if w.historyWaiters == nil {
+		w.historyWaiters = make(map[string][]chan struct{})
+	}
+	w.historyWaiters[sender] = append(w.historyWaiters[sender], waiter)
+	w.historyWaitersMu.Unlock()
+	return waiter
+}
+
+// notifyHistoryChatState membangunkan semua penunggu untuk satu sender.
+func (w *waInstance) notifyHistoryChatState(sender string) {
+	w.historyWaitersMu.Lock()
+	waiters := w.historyWaiters[sender]
+	delete(w.historyWaiters, sender)
+	w.historyWaitersMu.Unlock()
+	for _, waiter := range waiters {
+		close(waiter)
+	}
+}
+
+// notifyAllHistoryWaiters membangunkan SEMUA penunggu (ack request penuh).
+func (w *waInstance) notifyAllHistoryWaiters() {
+	w.historyWaitersMu.Lock()
+	unique := make(map[chan struct{}]struct{})
+	for _, waiters := range w.historyWaiters {
+		for _, waiter := range waiters {
+			unique[waiter] = struct{}{}
+		}
+	}
+	w.historyWaiters = make(map[string][]chan struct{})
+	w.historyWaitersMu.Unlock()
+	for waiter := range unique {
+		close(waiter)
+	}
+}
+
+// removeHistoryWaiter membatalkan satu penunggu (timeout/konteks selesai).
+func (w *waInstance) removeHistoryWaiter(sender string, target chan struct{}) {
+	w.historyWaitersMu.Lock()
+	defer w.historyWaitersMu.Unlock()
+	waiters := w.historyWaiters[sender]
+	for i, waiter := range waiters {
+		if waiter == target {
+			waiters = append(waiters[:i], waiters[i+1:]...)
+			break
+		}
+	}
+	if len(waiters) == 0 {
+		delete(w.historyWaiters, sender)
+	} else {
+		w.historyWaiters[sender] = waiters
+	}
+}
+
+// isOwnerReadReceipt = read receipt untuk pesan yang KITA kirim (dibaca/diputar
+// oleh pelanggan), bukan receipt untuk pesan masuk dari pelanggan.
+func isOwnerReadReceipt(receipt *events.Receipt) bool {
+	if receipt == nil {
+		return false
+	}
+	if receipt.Type == types.ReceiptTypeReadSelf || receipt.Type == types.ReceiptTypePlayedSelf {
+		return true
+	}
+	return receipt.IsFromMe && (receipt.Type == types.ReceiptTypeRead || receipt.Type == types.ReceiptTypePlayed)
+}
 
 // unwrapHistoryMessage memparse satu pesan riwayat menjadi HistoricalMessage.
 func unwrapHistoryMessage(w *waInstance, conv *waHistorySync.Conversation, msgEvt *waWeb.WebMessageInfo, lastTs time.Time) (HistoricalMessage, bool) {

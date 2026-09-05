@@ -16,7 +16,15 @@ import (
 
 const (
 	unreadBootstrapLimit     = 12
+	unreadBootstrapProbeWait = 6 * time.Second
 	unreadBootstrapReadyWait = 30 * time.Second
+
+	// automaticCatchUpLimit = batas percakapan yang boleh diresync otomatis
+	// sekaligus (menjaga beban server dalam jendela interaktif).
+	automaticCatchUpLimit = 6
+	// automaticCatchUpMessageCount = batas pesan per percakapan pada
+	// catch-up otomatis (mencegah import raksasa saat nomor baru connect).
+	automaticCatchUpMessageCount = 100
 )
 
 // reconcileUnreadAfterConnect melengkapi status percakapan yang tidak
