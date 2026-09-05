@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"log"
 	"sort"
 	"strings"
@@ -374,4 +375,70 @@ func RequestHistoryResync(c *gin.Context) {
 			"message": "Permintaan sinkronisasi dikirim; riwayat akan muncul bertahap",
 		})
 	}
+}
+
+// RequestHistorySync — POST /agents/:id/history-sync (mesin deep-sync v4):
+// reservasi slot satu-per-satu → 202 + worker menjalankan sinkronisasi
+// multi-pass (catch-up ujung → paginasi ke belakang → fallback penuh).
+func RequestHistorySync(c *gin.Context) {
+	id, ok := resolveAgent(c)
+	if !ok {
+		return
+	}
+	var req struct {
+		Sender string `json:"sender"`
+		Count  int    `json:"count"`
+		Deep   *bool  `json:"deep"`
+	}
+	_ = c.ShouldBindJSON(&req)
+	req.Sender = strings.TrimSpace(req.Sender)
+	if req.Sender == "" {
+		c.JSON(400, gin.H{"error": "sender percakapan wajib diisi"})
+		return
+	}
+	deep := true
+	if req.Deep != nil {
+		deep = *req.Deep
+	}
+
+	wa := services.WA(id)
+
+	// Mode ringan (deep=false): satu putaran catch-up percakapan.
+	if !deep && req.Count > 0 {
+		waLast := services.ChatWATipTime(id, req.Sender)
+		agentID, sender := id, req.Sender
+		services.Go("catch-up-history-sync", func() {
+			if err := wa.RequestRecentChatCatchUp(sender, req.Count, waLast); err != nil {
+				log.Printf("WA agent %d: catch-up %s: %v", agentID, sender, err)
+			}
+			publishInboxEvent(agentID, sender, "history_sync")
+		})
+		c.JSON(202, gin.H{
+			"message": "Sinkronisasi percakapan dimulai di background.",
+			"data":    wa.HistorySyncStatus(),
+		})
+		return
+	}
+
+	// Mode deep (default): tarik sedalam data nyata di HP (paginate + full).
+	st, err := wa.ReserveDeepHistorySync(req.Sender)
+	if err != nil {
+		payload := gin.H{"error": err.Error(), "data": st}
+		if errors.Is(err, services.ErrHistorySyncBusy) {
+			payload["message"] = "Sinkronisasi lain masih berjalan. Tunggu hingga selesai sebelum mencoba lagi."
+		}
+		c.JSON(409, payload)
+		return
+	}
+	agentID, sender := id, req.Sender
+	services.Go("deep-history-sync", func() {
+		if err := wa.RunReservedDeepHistorySync(sender); err != nil {
+			log.Printf("WA agent %d: deep history %s: %v", agentID, sender, err)
+		}
+		publishInboxEvent(agentID, sender, "history_sync")
+	})
+	c.JSON(202, gin.H{
+		"message": "Sinkronisasi riwayat lengkap dimulai. Sistem akan menarik sebanyak yang tersedia di HP.",
+		"data":    st,
+	})
 }

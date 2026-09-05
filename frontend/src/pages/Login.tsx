@@ -275,7 +275,7 @@ export default function Login() {
           <Box sx={{ textAlign: 'center', mb: 0.5 }}>
             <img
               src={logo}
-              alt="SlaluDiskon"
+              alt="CRM"
                             style={{
                 width: '42%',
                 maxWidth: 180,

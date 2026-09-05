@@ -33,10 +33,10 @@ func main() {
 	database.Init()
 	handlers.ConsolidateAllKnowledge()
 
-	// Verifikasi lisensi saat startup.
-	if !license.Verify() {
-		ui.LicenseError(license.VerifyMessage)
-	}
+	// Verifikasi lisensi saat startup (senyap: tanpa key, server tetap jalan;
+	// dengan key yang tidak valid, hanya dicatat — tidak menghentikan layanan
+	// dan tidak menampilkan apa pun ke pengguna).
+	license.Verify()
 	appCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	// A terminal license decision or expired offline grace triggers the same
@@ -332,6 +332,7 @@ func main() {
 			auth.GET("/team/activity", handlers.RequireTenantAdmin(), handlers.ListCSActivity)
 
 			auth.GET("/agents/:id/history-sync/status", handlers.GetHistorySyncStatus)
+			auth.POST("/agents/:id/history-sync", handlers.RequestHistorySync)
 			auth.POST("/agents/:id/history-sync/resync", handlers.RequestHistoryResync)
 			auth.GET("/agents/:id/inbox/events", handlers.InboxEvents)
 			auth.POST("/agents/:id/inbox/reset", handlers.RequireTenantAdmin(), handlers.ResetAgentInbox)

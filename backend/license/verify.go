@@ -108,9 +108,10 @@ func Verify() bool {
 
 	key := strings.TrimSpace(config.Env("LICENSE_KEY", ""))
 	if key == "" {
-		setVerificationState(false, "no_key", "LICENSE_KEY kosong. Konfigurasi runtime license belum aktif.", "")
-		log.Printf("[license] GAGAL: %s", VerifyMessage)
-		return false
+		// Tanpa key: jalankan normal secara senyap (tidak ada kotak, tidak ada
+		// penghentian) — pengalaman klien bersih dari urusan lisensi.
+		setVerificationState(true, "unconfigured", "", "")
+		return true
 	}
 
 	machine, legacyMachine, err := machineFingerprints()
@@ -147,8 +148,9 @@ func Heartbeat() bool {
 
 	key := strings.TrimSpace(config.Env("LICENSE_KEY", ""))
 	if key == "" {
-		setVerificationState(false, "no_key", "LICENSE_KEY kosong", "")
-		return false
+		// Tanpa key: heartbeat senyap & selalu dianggap sehat (server tidak
+		// pernah mati gara-gara lisensi bila key tidak dikonfigurasi).
+		return true
 	}
 
 	machine, legacyMachine, err := machineFingerprints()

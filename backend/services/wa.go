@@ -97,6 +97,10 @@ type waInstance struct {
 	// Waiter history sync: kode yang menunggu hasil sinkronisasi (tombol Resync).
 	historyWaitersMu sync.Mutex
 	historyWaiters   map[string][]chan struct{}
+	// Deep-sync (pola v4): serialisasi job + status yang jujur untuk UI.
+	historyRequestMu sync.Mutex
+	historySeq       uint64
+	historyStatus    HistorySyncStatus
 	status           string // "disconnected", "qr", "connecting", "connected", "expired", "pairing", "pair_error"
 	contactsSynced   bool   // true setelah backfill nama kontak dari buku alamat (sekali per proses)
 

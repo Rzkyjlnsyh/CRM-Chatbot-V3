@@ -489,6 +489,14 @@ func InboxConversation(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "sender wajib"})
 		return
 	}
+	// Mesin deep-sync v4: bila pratinjau chat ini basi dibanding WA (chat bolong),
+	// tarik catch-up ringan di background — chat terisi sendiri tanpa klik apa pun.
+	if services.ChatPreviewStale(id, sender) {
+		agentID, senderNum := id, sender
+		services.Go("conversation-catch-up", func() {
+			_ = services.WA(agentID).RequestRecentChatCatchUp(senderNum, 100, time.Time{})
+		})
+	}
 
 	limit := 300 // default: tampung banyak percakapan
 	if l, err := strconv.Atoi(c.DefaultQuery("limit", "300")); err == nil && l > 0 && l <= 1000 {

@@ -50,6 +50,7 @@ func SetChatPresenceHandler(handler ChatPresenceHandler) { onChatPresence = hand
 
 // HistorySyncStatus = kondisi sinkronisasi terakhir per agent (in-memory).
 type HistorySyncStatus struct {
+	// Lapisan lama (dipakai handler/histori) — tetap dipertahankan.
 	AgentID    uint
 	Started    time.Time
 	Finished   time.Time
@@ -58,6 +59,17 @@ type HistorySyncStatus struct {
 	InProgress bool
 	Processed  int
 	BatchCount int
+
+	// Lapisan v4 (mesin deep-sync): status yang jujur untuk UI.
+	State      string     `json:"state"`
+	Mode       string     `json:"mode,omitempty"`
+	Sender     string     `json:"sender,omitempty"`
+	Progress   int        `json:"progress"`
+	Error      string     `json:"error,omitempty"`
+	StillStale bool       `json:"still_stale,omitempty"`
+	Message    string     `json:"message,omitempty"`
+	StartedAt  *time.Time `json:"started_at,omitempty"`
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
 }
 
 var historySyncStatuses = map[uint]*HistorySyncStatus{}

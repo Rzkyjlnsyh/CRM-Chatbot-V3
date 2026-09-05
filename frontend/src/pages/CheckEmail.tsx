@@ -32,7 +32,7 @@ export default function CheckEmail() {
     <Box sx={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: 'background.default', p: 2 }}>
       <Card sx={{ width: '100%', maxWidth: 440 }}>
         <Box sx={{ textAlign: 'center', pt: 3, px: 4 }}>
-          <img src={logo} alt="SlaluDiskon" style={{ width: '50%', maxWidth: 180, height: 'auto', display: 'block', margin: '0 auto' }} />
+          <img src={logo} alt="CRM" style={{ width: '50%', maxWidth: 180, height: 'auto', display: 'block', margin: '0 auto' }} />
         </Box>
         <CardContent sx={{ px: { xs: 3, sm: 4 }, pb: 4, textAlign: 'center' }}>
           <MarkEmailReadOutlinedIcon sx={{ fontSize: 56, color: 'primary.main', mt: 1 }} />
