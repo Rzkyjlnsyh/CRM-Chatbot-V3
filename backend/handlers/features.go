@@ -246,7 +246,16 @@ func InboxContacts(c *gin.Context) {
 		like := "%" + searchQ + "%"
 		args = append(args, like, id, like)
 	}
-	baseSQL += ` LIMIT 500`
+	// ORDER SEBELUM LIMIT: waktu efektif = yang terbaru antara state WA dan
+	// baris chat terakhir. Tanpa ini, baris yang state WA-nya basi (chat
+	// terbaru di identitas lain) terpotong LIMIT 500 → "hilang dari Semua".
+	baseSQL += `
+		ORDER BY CASE
+			WHEN rs.last_msg_at IS NULL THEN ch.created_at
+			WHEN ch.created_at IS NOT NULL AND ch.created_at > rs.last_msg_at THEN ch.created_at
+			ELSE rs.last_msg_at
+		END DESC
+		LIMIT 500`
 
 	var rows []inboxRow
 	if err := database.DB.Raw(baseSQL, args...).Scan(&rows).Error; err != nil || len(rows) == 0 {
@@ -273,7 +282,7 @@ func InboxContacts(c *gin.Context) {
 			legacySQL += ` AND ch.sender IN (SELECT sender FROM chat_labels WHERE agent_id = ? AND label_id = ?)`
 			legacyArgs = append(legacyArgs, id, labelFilter)
 		}
-		legacySQL += ` ORDER BY ch.id DESC LIMIT 500`
+		legacySQL += ` ORDER BY ch.created_at DESC LIMIT 500`
 		_ = database.DB.Raw(legacySQL, legacyArgs...).Scan(&legacyRows).Error
 		for _, r := range legacyRows {
 			rows = append(rows, inboxRow{Sender: r.Sender, CHLast: &r.LastAt, LastMsg: r.LastMsg})
