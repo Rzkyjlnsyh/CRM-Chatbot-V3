@@ -52,7 +52,9 @@ import MetaCapiPanel from '../components/MetaCapiPanel';
 import PipelinePanel from '../components/PipelinePanel';
 import FlowPanel from '../components/FlowPanel';
 import ApiPanel from '../components/ApiPanel';
+import LincahPanel from '../components/LincahPanel';
 import ApiIcon from '@mui/icons-material/ApiOutlined';
+import LocalShippingIcon from '@mui/icons-material/LocalShippingOutlined';
 import WidgetPanel from '../components/WidgetPanel';
 import WidgetsIcon from '@mui/icons-material/WidgetsOutlined';
 import AccountTreeIcon from '@mui/icons-material/AccountTreeOutlined';
@@ -239,6 +241,7 @@ const NAV_GROUPS = [
     { id: 'tim-cs', label: 'Tim CS', icon: <PeopleAltIcon fontSize="small" /> },
     { id: 'widget', label: 'Widget & Link', icon: <WidgetsIcon fontSize="small" /> },
     { id: 'api', label: 'REST API', icon: <ApiIcon fontSize="small" /> },
+    { id: 'lincah', label: 'Lincah', icon: <LocalShippingIcon fontSize="small" /> },
     { id: 'settings', label: 'Pengaturan', icon: <SettingsIcon fontSize="small" /> },
     
   ] },
@@ -2403,6 +2406,7 @@ export default function Dashboard() {
         {tab === 'meta-capi' && <MetaCapiPanel agentId={agentId} />}
         {tab === 'alur' && <FlowPanel agentId={agentId} />}
         {tab === 'api' && <ApiPanel agentId={agentId} onOpenDashboard={() => setTab('dashboard')} />}
+        {tab === 'lincah' && <LincahPanel agentId={agentId} />}
         {tab === 'widget' && <WidgetPanel agentId={agentId} />}
         {tab === 'status' && <StatusPanel agentId={agentId} />}
         {tab === 'tim-cs' && <TeamPanel agents={agents} />}
