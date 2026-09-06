@@ -77,7 +77,7 @@ func lincahMockServer(t *testing.T) (*httptest.Server, *[]string) {
 			return
 		}
 		if r.Method == "POST" {
-			_, _ = w.Write([]byte(`{"success":true,"data":{"id":"ord123","no_order":"2410A7EHAD31","name":"John Doe","phone":"628568807076","address":"Jl. Remaja No. 20, Kediri","weight":1,"courier":"jne","courier_service":"JRE","quantity":1,"product_price":100000,"product_name":"2 pcs kaos","status":"waiting","type":"regular","destination_text":"Bantul, Kab. Bantul, DI Yogyakarta","destination_id":"34.02.01","sender_type":"picked-up","sender":{"name":"Gudang Jakarta","phone":"628123123","address":"Jl. Nusantara 10","origin_id":"36.03.12","zipcode":"15560"},"resi":"LNCHS2410A7EHAD31","ongkir":{"fee":11340,"feeReal":16200,"discount":4860,"insurance":0}}`))
+			_, _ = w.Write([]byte(`{"success":true,"data":{"id":"ord123","no_order":"2410A7EHAD31","name":"John Doe","phone":"628568807076","address":"Jl. Remaja No. 20, Kediri","weight":1,"courier":"jne","courier_service":"JRE","quantity":1,"product_price":100000,"product_name":"2 pcs kaos","status":"waiting","type":"regular","destination_text":"Bantul, Kab. Bantul, DI Yogyakarta","destination_id":"34.02.01","sender_type":"picked-up","sender":{"name":"Gudang Jakarta","phone":"628123123","address":"Jl. Nusantara 10","origin_id":"36.03.12","zipcode":"15560"},"resi":"LNCHS2410A7EHAD31","ongkir":{"fee":11340,"feeReal":16200,"discount":4860,"insurance":0}}}`))
 			return
 		}
 		w.WriteHeader(404)
@@ -116,19 +116,28 @@ func lincahMockServer(t *testing.T) (*httptest.Server, *[]string) {
 	return srv, &calls
 }
 
-// registerConfig — set kredensial mock di DB (SQLite in-memory) sebelum tiap test.
+// setupLincahTestDB — DB SQLite in-memory MILIK SENDIRI per test.
+// PENTING: di suite penuh, database.DB global di-clobber oleh test paket
+// lain (pola learning_test); tanpa DB sendiri, tabel lincah_configs tidak
+// ada → tes gagal beruntun atau panic.
+func setupLincahTestDB(t *testing.T) {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open("file:lincah-test?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("gagal buka db tes: %v", err)
+	}
+	if err := db.AutoMigrate(&models.LincahConfig{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	old := database.DB
+	database.DB = db
+	t.Cleanup(func() { database.DB = old })
+}
+
+// registerConfig — set kredensial mock di DB milik sendiri sebelum tiap test.
 func registerConfig(t *testing.T, base string) {
 	t.Helper()
-	if database.DB == nil {
-		db, err := gorm.Open(sqlite.Open("file:lincah-test?mode=memory&cache=shared"), &gorm.Config{})
-		if err != nil {
-			t.Fatalf("gagal buka db tes: %v", err)
-		}
-		if err := db.AutoMigrate(&models.LincahConfig{}); err != nil {
-			t.Fatalf("migrate: %v", err)
-		}
-		database.DB = db
-	}
+	setupLincahTestDB(t)
 	if err := LincahSaveConfig(1, "partnerid-abc", "tokentest", base); err != nil {
 		t.Fatalf("gagal simpan config: %v", err)
 	}
@@ -258,6 +267,7 @@ func TestLincahUnauthorizedPropagates(t *testing.T) {
 	// pesan dari Lincah (bukan kesalahan parsing lokal).
 	srv, _ := lincahMockServer(t)
 	defer srv.Close()
+	setupLincahTestDB(t)
 	if err := LincahSaveConfig(2, "partnerid-abc", "tokenSALAH", srv.URL); err != nil {
 		t.Fatalf("config: %v", err)
 	}
@@ -272,6 +282,7 @@ func TestLincahUnauthorizedPropagates(t *testing.T) {
 
 func TestLincahNoTokenGivesFriendlyError(t *testing.T) {
 	// Tanpa token (config kosong & env kosong) → pesan ramah, bukan panic.
+	setupLincahTestDB(t)
 	if err := LincahSaveConfig(3, "", "", ""); err != nil {
 		t.Fatalf("config: %v", err)
 	}
