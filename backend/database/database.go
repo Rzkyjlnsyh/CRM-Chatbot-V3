@@ -111,6 +111,8 @@ func Init() {
 		&models.UserAgentAssignment{},
 		&models.CSActivityLog{},
 		&models.SenderAlias{},
+		&models.LincahConfig{},
+		&models.LincahOrder{},
 	)
 
 	backfillKnowledgeCharCount()
