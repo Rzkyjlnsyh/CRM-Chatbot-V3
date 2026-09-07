@@ -128,14 +128,16 @@ func LincahSaveConfig(agentID uint, partnerID, token, baseURL string) error {
 // LincahConfigUpdate = seluruh kolom konfigurasi Lincah (termasuk AI ongkir).
 // Token KOSONG = "tidak diubah" (biarkan yang tersimpan).
 type LincahConfigUpdate struct {
-	PartnerID string
-	Token     string
-	BaseURL   string
-	AIEnabled bool
-	Preferred string
-	Fallback  string
-	WhMode    string
-	FixedWh   string
+	PartnerID      string
+	Token          string
+	BaseURL        string
+	AIEnabled      bool
+	Preferred      string
+	Fallback       string
+	WhMode         string
+	FixedWh        string
+	AutoNotify     bool
+	NotifyTemplate string
 }
 
 // LincahSaveConfigFull menyimpan seluruh konfigurasi Lincah per agent.
@@ -163,6 +165,10 @@ func LincahSaveConfigFull(agentID uint, u LincahConfigUpdate) error {
 		cfg.WarehouseMode = "nearest"
 	}
 	cfg.FixedWarehouseID = u.FixedWh
+	cfg.AutoNotify = u.AutoNotify
+	if u.NotifyTemplate != "" {
+		cfg.NotifyTemplate = u.NotifyTemplate
+	}
 	if cfg.ID == 0 {
 		return database.DB.Create(&cfg).Error
 	}

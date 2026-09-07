@@ -24,6 +24,8 @@ interface LincahConfig {
   fallback_couriers: string;
   warehouse_mode: string;
   fixed_warehouse_id: string;
+  auto_notify: boolean;
+  notify_template: string;
 }
 
 interface Warehouse {
@@ -55,6 +57,7 @@ export default function LincahPanel({ agentId }: { agentId: number }) {
   const [cfg, setCfg] = useState<LincahConfig>({
     partner_id: '', base_url: DEV_BASE, token_set: false, ai_enabled: false,
     preferred_couriers: '', fallback_couriers: '', warehouse_mode: 'nearest', fixed_warehouse_id: '',
+    auto_notify: false, notify_template: '',
   });
   const [token, setToken] = useState('');
   const [testResult, setTestResult] = useState<string | null>(null);
@@ -312,6 +315,23 @@ export default function LincahPanel({ agentId }: { agentId: number }) {
                 </Select>
               </Grid>
             )}
+          </Grid>
+          <Divider sx={{ my: 2 }} />
+          <Typography variant="subtitle2">🔔 Follow-up Otomatis (webhook status paket)</Typography>
+          <Grid container spacing={1.5} sx={{ mt: 0.5 }}>
+            <Grid size={{ xs: 12 }}>
+              <FormControlLabel
+                control={<Switch checked={cfg.auto_notify}
+                  onChange={(e) => setCfg({ ...cfg, auto_notify: e.target.checked })} />}
+                label={cfg.auto_notify ? 'Aktif — pelanggan dikabari saat status paket berubah' : 'Nonaktif'} />
+            </Grid>
+            <Grid size={{ xs: 12 }}>
+              <TextField size="small" fullWidth multiline minRows={2} label="Template pesan status"
+                value={cfg.notify_template}
+                placeholder={'Halo kak! 📦 Paket {{resi}} Anda: *{{status}}*.{{message}}'}
+                helperText={'Variabel: {{resi}} {{no_order}} {{status}} {{courier}} {{nama}} {{message}} — kosongkan untuk template bawaan'}
+                onChange={(e) => setCfg({ ...cfg, notify_template: e.target.value })} />
+            </Grid>
           </Grid>
           {testResult && <Alert severity="success" sx={{ mt: 1.5 }}>{testResult}</Alert>}
           {testError && <Alert severity="error" sx={{ mt: 1.5 }}>{testError}</Alert>}

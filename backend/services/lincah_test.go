@@ -137,7 +137,7 @@ func setupLincahTestDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("gagal buka db tes: %v", err)
 	}
-	if err := db.AutoMigrate(&models.LincahConfig{}, &models.LincahTenantConfig{}, &models.Agent{}); err != nil {
+	if err := db.AutoMigrate(&models.LincahConfig{}, &models.LincahTenantConfig{}, &models.Agent{}, &models.LincahOrder{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	old := database.DB

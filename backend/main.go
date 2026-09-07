@@ -144,6 +144,8 @@ func main() {
 		// Shipping public (search address tidak perlu auth)
 		api.GET("/shipping/search-address", handlers.SearchMengantarAddress)
 		api.GET("/shipping/addresses", handlers.AuthMiddleware(), handlers.GetMengantarAddresses)
+		// Lincah webhook — DIPANGGIL OLEH LINCAH (incoming), publik.
+		api.POST("/lincah/webhook", handlers.LincahWebhook)
 
 		auth := api.Group("", handlers.AuthMiddleware())
 		auth.Use(handlers.CSRouteGuard()) // CS-only hanya bisa akses agent yang di-assign

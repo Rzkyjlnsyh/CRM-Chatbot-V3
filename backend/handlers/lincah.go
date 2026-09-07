@@ -72,6 +72,8 @@ func SaveLincahConfig(c *gin.Context) {
 		FallbackCouriers  string `json:"fallback_couriers"`
 		WarehouseMode     string `json:"warehouse_mode"`
 		FixedWarehouseID  string `json:"fixed_warehouse_id"`
+		AutoNotify        bool   `json:"auto_notify"`
+		NotifyTemplate    string `json:"notify_template"`
 		Scope             string `json:"scope"` // "" | "agent" | "tenant"
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -86,14 +88,16 @@ func SaveLincahConfig(c *gin.Context) {
 		}
 	}
 	if err := services.LincahSaveConfigFull(agentID, services.LincahConfigUpdate{
-		PartnerID: strings.TrimSpace(req.PartnerID),
-		Token:     strings.TrimSpace(req.Token),
-		BaseURL:   strings.TrimSpace(req.BaseURL),
-		AIEnabled: req.AIEnabled,
-		Preferred: req.PreferredCouriers,
-		Fallback:  req.FallbackCouriers,
-		WhMode:    req.WarehouseMode,
-		FixedWh:   req.FixedWarehouseID,
+		PartnerID:      strings.TrimSpace(req.PartnerID),
+		Token:          strings.TrimSpace(req.Token),
+		BaseURL:        strings.TrimSpace(req.BaseURL),
+		AIEnabled:      req.AIEnabled,
+		Preferred:      req.PreferredCouriers,
+		Fallback:       req.FallbackCouriers,
+		WhMode:         req.WarehouseMode,
+		FixedWh:        req.FixedWarehouseID,
+		AutoNotify:     req.AutoNotify,
+		NotifyTemplate: strings.TrimSpace(req.NotifyTemplate),
 	}); err != nil {
 		c.JSON(500, gin.H{"error": "gagal menyimpan: " + err.Error()})
 		return

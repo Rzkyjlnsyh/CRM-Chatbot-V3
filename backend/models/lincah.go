@@ -24,36 +24,44 @@ type LincahConfig struct {
 	Token     string `gorm:"size:512" json:"token"`
 	BaseURL   string `gorm:"size:160;default:https://dev-api.lincah.id/openapi" json:"base_url"`
 	// AI Ongkir: AI menjawab pertanyaan ongkir dengan data Lincah nyata.
-	AIEnabled         bool      `gorm:"default:false" json:"ai_enabled"`
-	PreferredCouriers string    `gorm:"size:160" json:"preferred_couriers"`            // "jne,sap" (urutan utama)
-	FallbackCouriers  string    `gorm:"size:160" json:"fallback_couriers"`             // cadangan bila utama tak menjangkau
-	WarehouseMode     string    `gorm:"size:16;default:nearest" json:"warehouse_mode"` // nearest|first|fixed
-	FixedWarehouseID  string    `gorm:"size:64" json:"fixed_warehouse_id"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	AIEnabled         bool   `gorm:"default:false" json:"ai_enabled"`
+	PreferredCouriers string `gorm:"size:160" json:"preferred_couriers"`            // "jne,sap" (urutan utama)
+	FallbackCouriers  string `gorm:"size:160" json:"fallback_couriers"`             // cadangan bila utama tak menjangkau
+	WarehouseMode     string `gorm:"size:16;default:nearest" json:"warehouse_mode"` // nearest|first|fixed
+	FixedWarehouseID  string `gorm:"size:64" json:"fixed_warehouse_id"`
+	// Follow-up otomatis: kabari pelanggan saat status paket berubah (webhook).
+	AutoNotify     bool      `gorm:"default:false" json:"auto_notify"`
+	NotifyTemplate string    `gorm:"size:512" json:"notify_template"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // LincahOrder = audit trail pesanan yang dibuat lewat Lincah dari dashboard.
 // Detail mentah dari Lincah disimpan di RawJSON agar tidak kehilangan data
 // tambahan saat API berevolusi (fleksibel tanpa migrasi berulang).
 type LincahOrder struct {
-	ID            uint      `gorm:"primaryKey" json:"id"`
-	AgentID       uint      `gorm:"index:idx_lincah_order_agent_sender,priority:1;not null" json:"agent_id"`
-	Sender        string    `gorm:"size:32;index:idx_lincah_order_agent_sender,priority:2" json:"sender"`
-	LincahOrderID string    `gorm:"size:64;index;not null" json:"lincah_order_id"`
-	NoOrder       string    `gorm:"size:64;index" json:"no_order"`
-	Resi          string    `gorm:"size:64;index" json:"resi"`
-	Status        string    `gorm:"size:32;index" json:"status"`
-	Courier       string    `gorm:"size:32" json:"courier"`
-	CourierSvc    string    `gorm:"size:64" json:"courier_service"`
-	Name          string    `gorm:"size:128" json:"name"`
-	Phone         string    `gorm:"size:32" json:"phone"`
-	Address       string    `gorm:"type:text" json:"address"`
-	Destination   string    `gorm:"size:64" json:"destination"`
-	ProductName   string    `gorm:"size:128" json:"product_name"`
-	ProductPrice  int64     `json:"product_price"`
-	Weight        int64     `json:"weight"`
-	Fee           int64     `json:"fee"`
-	RawJSON       string    `gorm:"type:longtext" json:"-"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID            uint   `gorm:"primaryKey" json:"id"`
+	AgentID       uint   `gorm:"index:idx_lincah_order_agent_sender,priority:1;not null" json:"agent_id"`
+	Sender        string `gorm:"size:32;index:idx_lincah_order_agent_sender,priority:2" json:"sender"`
+	LincahOrderID string `gorm:"size:64;index;not null" json:"lincah_order_id"`
+	NoOrder       string `gorm:"size:64;index" json:"no_order"`
+	Resi          string `gorm:"size:64;index" json:"resi"`
+	Status        string `gorm:"size:32;index" json:"status"`
+	Courier       string `gorm:"size:32" json:"courier"`
+	CourierSvc    string `gorm:"size:64" json:"courier_service"`
+	Name          string `gorm:"size:128" json:"name"`
+	Phone         string `gorm:"size:32" json:"phone"`
+	Address       string `gorm:"type:text" json:"address"`
+	Destination   string `gorm:"size:64" json:"destination"`
+	ProductName   string `gorm:"size:128" json:"product_name"`
+	ProductPrice  int64  `json:"product_price"`
+	Weight        int64  `json:"weight"`
+	Fee           int64  `json:"fee"`
+	RawJSON       string `gorm:"type:longtext" json:"-"`
+	// Follow-up webhook: status terakhir dari Lincah + status yang SUDAH
+	// diberitahukan ke pelanggan (anti-spam notifikasi duplikat).
+	WebhookStatus  string     `gorm:"size:48" json:"webhook_status"`
+	NotifiedStatus string     `gorm:"size:48" json:"notified_status"`
+	LastNotifyAt   *time.Time `json:"last_notify_at"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
 }
