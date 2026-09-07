@@ -3,7 +3,7 @@
 // daftar kurir, cek ongkir, pesanan lokal + lacak + cetak resi.
 import { useCallback, useEffect, useState } from 'react';
 import {
-  Box, Button, Card, CardContent, Chip, CircularProgress, Dialog, DialogActions,
+  Autocomplete, Box, Button, Card, CardContent, Chip, CircularProgress, Dialog, DialogActions,
   DialogContent, DialogTitle, Divider, FormControlLabel,
   Grid, MenuItem, Select, Switch, TextField, Typography,
   Table, TableBody, TableCell, TableHead, TableRow,
@@ -77,6 +77,36 @@ export default function LincahPanel({ agentId }: { agentId: number }) {
   const [dims, setDims] = useState('10x10x10');
   const [costs, setCosts] = useState<CostRow[] | null>(null);
   const [ongkirLoading, setOngkirLoading] = useState(false);
+
+  // Autocomplete alamat tujuan (rekomendasi kecamatan dari Lincah —
+  // pola Mengantar: minim salah ketik, kode DIJAMIN valid untuk ongkir).
+  interface DistrictOpt { code: string; name: string; city: string; city_type: string; province: string }
+  const [distInput, setDistInput] = useState('');
+  const [distOptions, setDistOptions] = useState<DistrictOpt[]>([]);
+  const [distLoading, setDistLoading] = useState(false);
+  useEffect(() => {
+    const q = distInput.trim();
+    if (q.length < 3) {
+      setDistOptions([]);
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      setDistLoading(true);
+      try {
+        const r = (await api.get(`/agents/${agentId}/lincah/district/search`, { params: { q } })).data;
+        if (!cancelled) setDistOptions(r?.data ?? []);
+      } catch {
+        if (!cancelled) setDistOptions([]);
+      } finally {
+        if (!cancelled) setDistLoading(false);
+      }
+    }, 400);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [distInput, agentId]);
+
+  const districtLabel = (o: DistrictOpt | string) =>
+    typeof o === 'string' ? o : `${o.name}, ${o.city_type} ${o.city}, ${o.province} (${o.code})`;
   // Quote cepat (chat-quote): tujuan + berat → teks siap kirim ke pelanggan.
   const [quickDest, setQuickDest] = useState('');
   const [quickWeight, setQuickWeight] = useState('1');
@@ -437,12 +467,41 @@ export default function LincahPanel({ agentId }: { agentId: number }) {
                   </Select>
                 </Grid>
                 <Grid size={{ xs: 12, sm: 6 }}>
-                  <TextField size="small" fullWidth label="Kode tujuan (mis. 34.02.01)" value={destCode}
-                    onChange={(e) => setDestCode(e.target.value)} />
+                  <Autocomplete
+                    size="small"
+                    freeSolo
+                    inputValue={distInput}
+                    onInputChange={(_, v) => setDistInput(v)}
+                    options={distOptions}
+                    getOptionLabel={districtLabel}
+                    loading={distLoading}
+                    filterOptions={(x) => x}
+                    onChange={(_, v) => {
+                      if (v && typeof v === 'object' && 'code' in v) {
+                        setDestCode((v as DistrictOpt).code);
+                        setDestText(`${(v as DistrictOpt).name}, ${(v as DistrictOpt).city}`);
+                        setDistInput(districtLabel(v as DistrictOpt));
+                      }
+                    }}
+                    renderInput={(params) => (
+                      <TextField {...params} label="Cari tujuan (ketik min 3 huruf)"
+                        helperText="Pilih dari rekomendasi — kode kecamatan otomatis terisi akurat"
+                        onChange={(e) => {
+                          // freeSolo: ketik manual kode juga tetap dimungkinkan
+                          setDestCode(e.target.value);
+                        }} />
+                    )}
+                    noOptionsText={distInput.trim().length < 3 ? 'Ketik minimal 3 huruf' : 'Tidak ditemukan'}
+                  />
                 </Grid>
                 <Grid size={{ xs: 12, sm: 6 }}>
-                  <TextField size="small" fullWidth label="Nama tujuan" value={destText}
+                  <TextField size="small" fullWidth label="Nama tujuan (otomatis)" value={destText}
                     onChange={(e) => setDestText(e.target.value)} />
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <TextField size="small" fullWidth label="Kode kecamatan tujuan" value={destCode}
+                    helperText="Terisi otomatis dari rekomendasi"
+                    onChange={(e) => setDestCode(e.target.value)} />
                 </Grid>
                 <Grid size={{ xs: 6, sm: 3 }}>
                   <TextField size="small" fullWidth label="Berat (kg)" value={weight}

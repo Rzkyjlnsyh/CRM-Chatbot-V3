@@ -128,6 +128,28 @@ func TestLincahConnection(c *gin.Context) {
 // Data Lincah
 // ---------------------------------------------------------------------------
 
+// LincahSearchDistrictHandler — pencarian kecamatan untuk AUTOCOMPLETE alamat
+// tujuan di form Cek Ongkir (pola rekomendasi seperti Mengantar). Minimal
+// 3 karakter; hasil = kode + desa/kecamatan + kota + provinsi — kode yang
+// dipilih DIJAMIN valid untuk POST /ongkir (sumber data resmi Lincah).
+func LincahSearchDistrictHandler(c *gin.Context) {
+	agentID, ok := lincahAgentID(c)
+	if !ok {
+		return
+	}
+	q := strings.TrimSpace(c.Query("q"))
+	if len([]rune(q)) < 3 {
+		c.JSON(200, gin.H{"data": []services.LincahDistrict{}})
+		return
+	}
+	list, err := services.LincahSearchDistrict(agentID, q)
+	if err != nil {
+		c.JSON(502, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"data": list})
+}
+
 // LincahListAddresses — daftar gudang/alamat sender (GET /address).
 func LincahListAddresses(c *gin.Context) {
 	agentID, ok := lincahAgentID(c)

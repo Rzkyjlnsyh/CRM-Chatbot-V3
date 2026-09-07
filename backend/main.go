@@ -326,6 +326,7 @@ func main() {
 			auth.GET("/agents/:id/lincah/addresses", handlers.LincahListAddresses)
 			auth.GET("/agents/:id/lincah/couriers", handlers.LincahListCouriers)
 			auth.POST("/agents/:id/lincah/ongkir", handlers.LincahCheckOngkir)
+			auth.GET("/agents/:id/lincah/district/search", handlers.LincahSearchDistrictHandler)
 			auth.POST("/agents/:id/lincah/orders", handlers.LincahCreateOrder)
 			auth.GET("/agents/:id/lincah/orders", handlers.LincahListLocalOrders)
 			auth.GET("/agents/:id/lincah/orders/:id", handlers.LincahOrderDetail)
