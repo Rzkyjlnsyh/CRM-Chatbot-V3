@@ -651,7 +651,7 @@ export default function Dashboard() {
       await api.put('/settings/api-config', apiConfig);
       swalToast('Konfigurasi AI disimpan. Model langsung aktif.', 'success');
       // Refresh daftar model setelah simpan (karena api key mungkin baru)
-      if (apiConfig.api_key) {
+      if (apiConfig.api_key || apiConfig.deepseek_api_key) {
         void loadChatModels();
         void loadVisionModels();
         void loadEmbeddingModels();
@@ -713,7 +713,7 @@ export default function Dashboard() {
       if (cfg.api_model) setApiModel(cfg.api_model);
       if (cfg.vision_model) setVisionModel(cfg.vision_model);
       if (cfg.embedding_model) setEmbeddingModel(cfg.embedding_model);
-      if (cfg.api_key) {
+      if (cfg.api_key || cfg.deepseek_api_key) {
         void loadChatModels();
         void loadVisionModels();
         void loadEmbeddingModels();
@@ -2233,7 +2233,7 @@ export default function Dashboard() {
               <Button
                 variant="contained"
                 onClick={saveAPIConfigOnly}
-                disabled={!apiKey}
+                disabled={chatProvider === 'deepseek-direct' ? !deepseekKey : !apiKey}
                 startIcon={<AutoAwesomeIcon />}
                 fullWidth
                 sx={{ fontWeight: 700 }}
