@@ -59,6 +59,17 @@ func lincahMockServer(t *testing.T) (*httptest.Server, *[]string) {
 		}
 		_, _ = w.Write([]byte(`{"success":true,"data":[{"_id":"addr1","name":"Gudang Jakarta","address":"Jl. Nusantara 10","origin_id":"36.03.12","zipcode":"15560","geoloc":{"lat":-6.2,"long":106.6}}]}`))
 	})
+	mux.HandleFunc("/district/search", func(w http.ResponseWriter, r *http.Request) {
+		if !checkAuth(w, r) {
+			return
+		}
+		if len(r.URL.Query().Get("q")) < 3 {
+			w.WriteHeader(400)
+			_, _ = w.Write([]byte(`{"success":false,"message":"q min 3"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"success":true,"data":[{"code":"34.02.01","province":"DI Yogyakarta","city":"Bantul","name":"Bantul","id":"d1","fullName":"Bantul, Kab. Bantul, DI Yogyakarta"}]}`))
+	})
 	mux.HandleFunc("/ongkir", func(w http.ResponseWriter, r *http.Request) {
 		if !checkAuth(w, r) {
 			return
@@ -258,6 +269,50 @@ func TestLincahPrintAndCancel(t *testing.T) {
 	}
 	if err := LincahCancelOrder(1, "ord123"); err != nil {
 		t.Fatalf("Cancel: %v", err)
+	}
+}
+
+func TestLincahQuoteForChat(t *testing.T) {
+	srv, _ := lincahMockServer(t)
+	defer srv.Close()
+	registerConfig(t, srv.URL)
+	q, err := LincahQuoteForChat(1, "bantul", 1000, []int{10, 10, 10})
+	if err != nil {
+		t.Fatalf("QuoteForChat: %v", err)
+	}
+	if q.Destination != "34.02.01" || q.OriginID != "36.03.12" {
+		t.Fatalf("asal/tujuan salah: %+v", q)
+	}
+	if len(q.Options) == 0 || q.Options[0].Cost != 8830 {
+		t.Fatalf("opsi termurah harus SAP 8830: %+v", q.Options)
+	}
+	if !stringsContains(q.Text, "Bantul") || !stringsContains(q.Text, "8.830") {
+		t.Fatalf("teks quote salah: %q", q.Text)
+	}
+}
+
+func TestLincahQuoteForChatInvalidInput(t *testing.T) {
+	srv, _ := lincahMockServer(t)
+	defer srv.Close()
+	registerConfig(t, srv.URL)
+	if _, err := LincahQuoteForChat(1, "ab", 1000, nil); err == nil {
+		t.Fatal("harus menolak tujuan < 3 huruf")
+	}
+	if _, err := LincahQuoteForChat(1, "bantul", 50, nil); err == nil {
+		t.Fatal("harus menolak berat < 100 gram")
+	}
+}
+
+func TestLincahSearchDistrict(t *testing.T) {
+	srv, _ := lincahMockServer(t)
+	defer srv.Close()
+	registerConfig(t, srv.URL)
+	items, err := LincahSearchDistrict(1, "bantul")
+	if err != nil {
+		t.Fatalf("SearchDistrict: %v", err)
+	}
+	if len(items) != 1 || items[0].Code != "34.02.01" {
+		t.Fatalf("district salah: %+v", items)
 	}
 }
 

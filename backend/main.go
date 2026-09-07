@@ -330,6 +330,8 @@ func main() {
 			auth.GET("/agents/:id/lincah/orders/:id/track", handlers.LincahOrderTrack)
 			auth.POST("/agents/:id/lincah/orders/:id/cancel", handlers.LincahOrderCancel)
 			auth.GET("/agents/:id/lincah/orders/:id/pdf", handlers.LincahOrderPrint)
+			auth.GET("/agents/:id/lincah/districts/search", handlers.LincahSearchDistricts)
+			auth.POST("/agents/:id/lincah/chat-quote", handlers.LincahChatQuote)
 			auth.POST("/agents/:id/shipping/orders", handlers.CreateShippingOrder)
 			auth.POST("/agents/:id/shipping/sync-tracking", handlers.SyncShippingTracking)
 

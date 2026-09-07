@@ -26,6 +26,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"wa-assistant/backend/config"
@@ -340,6 +343,144 @@ type LincahTrackingOrder struct {
 	OriginID        string       `json:"origin_id"`
 	DestinationText string       `json:"destination_text"`
 	DestinationID   string       `json:"destination_id"`
+}
+
+type LincahDistrict struct {
+	Code       string `json:"code"`
+	ProvinceID string `json:"province_id"`
+	Province   string `json:"province"`
+	CityType   string `json:"city_type"`
+	City       string `json:"city"`
+	Name       string `json:"name"`
+	ID         string `json:"id"`
+	FullName   string `json:"fullName"`
+}
+
+// LincahSearchDistrict — cari kode kecamatan dari nama (min. 3 karakter).
+func LincahSearchDistrict(agentID uint, q string) ([]LincahDistrict, error) {
+	cfg := LincahGetConfig(agentID)
+	raw, _, err := lincahDo(lincahRequest{cfg: cfg, method: "GET", path: "/district/search", query: map[string]string{"q": q}})
+	if err != nil {
+		return nil, err
+	}
+	var env lincahEnvelope
+	if err := json.Unmarshal(raw, &env); err == nil && env.Success && len(env.Data) > 0 {
+		raw = env.Data
+	}
+	var out []LincahDistrict
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("lincah parse district: %w", err)
+	}
+	return out, nil
+}
+
+// LincahQuote adalah hasil siap-kirim: tarif termurah per kurir + teks ringkas.
+type LincahQuote struct {
+	OriginID    string              `json:"origin_id"`
+	Destination string              `json:"destination"`
+	DestName    string              `json:"dest_name"`
+	Weight      int64               `json:"weight"`
+	Options     []LincahQuoteOption `json:"options"`
+	Text        string              `json:"text"`
+}
+
+type LincahQuoteOption struct {
+	Courier string `json:"courier"`
+	Service string `json:"service"`
+	Cost    int64  `json:"cost"`
+	Etd     string `json:"etd"`
+}
+
+// LincahQuoteForChat — satu panggilan untuk kebutuhan chat/AI: pakai gudang
+// pertama sebagai asal, cari kecamatan tujuan dari teks, hitung tarif semua
+// kurir, kembalikan opsi terurut termurah + teks ringkas siap dikirim.
+// Dipakai tombol chat maupun jalur AI (deteksi niat ongkir).
+func LincahQuoteForChat(agentID uint, destQuery string, weightGrams int64, dimensions []int) (*LincahQuote, error) {
+	if len([]rune(strings.TrimSpace(destQuery))) < 3 {
+		return nil, fmt.Errorf("tujuan terlalu pendek (min. 3 huruf)")
+	}
+	if weightGrams < 100 {
+		return nil, fmt.Errorf("berat minimal 0.1 kg")
+	}
+	addrs, err := LincahAddresses(agentID)
+	if err != nil {
+		return nil, err
+	}
+	if len(addrs) == 0 {
+		return nil, fmt.Errorf("belum ada gudang terdaftar di akun Lincah")
+	}
+	origin := addrs[0]
+	originCode := origin.OriginID
+	if originCode == "" && origin.ID != "" {
+		originCode = origin.ID
+	}
+	districts, err := LincahSearchDistrict(agentID, destQuery)
+	if err != nil {
+		return nil, err
+	}
+	if len(districts) == 0 {
+		return nil, fmt.Errorf("tujuan tidak ditemukan di Lincah")
+	}
+	dest := districts[0]
+	if len(dimensions) < 3 {
+		dimensions = []int{10, 10, 10}
+	}
+	costs, err := LincahOngkir(agentID, LincahOngkirRequest{
+		IsPickup: true, IsCod: false,
+		Dimensions:  dimensions,
+		Weight:      weightGrams,
+		Origin:      originCode,
+		Destination: dest.Code,
+	})
+	if err != nil {
+		return nil, err
+	}
+	quote := &LincahQuote{
+		OriginID: originCode, Destination: dest.Code, DestName: dest.FullName, Weight: weightGrams,
+	}
+	for _, row := range costs {
+		for _, ci := range row.Costs {
+			quote.Options = append(quote.Options, LincahQuoteOption{
+				Courier: row.Name, Service: ci.Type, Cost: ci.Cost, Etd: ci.Etc,
+			})
+		}
+	}
+	if len(quote.Options) == 0 {
+		return nil, fmt.Errorf("tidak ada tarif tersedia untuk rute ini")
+	}
+	sort.SliceStable(quote.Options, func(a, b int) bool { return quote.Options[a].Cost < quote.Options[b].Cost })
+	best := quote.Options[0]
+	quote.Text = fmt.Sprintf("📦 *Ongkir %s → %s* (%.1f kg):\n%s %s: Rp %s",
+		origin.NameOrFallback(), dest.FullName, float64(weightGrams)/1000,
+		best.Courier, best.Service, formatRupiah(best.Cost))
+	return quote, nil
+}
+
+// NameOrFallback — nama gudang untuk tampilan (nama/alamat/id).
+func (a LincahAddress) NameOrFallback() string {
+	if a.Name != "" {
+		return a.Name
+	}
+	if a.Address != "" {
+		return a.Address
+	}
+	return a.ID
+}
+
+func formatRupiah(n int64) string {
+	s := strconv.FormatInt(n, 10)
+	var b strings.Builder
+	mod := len(s) % 3
+	if mod > 0 {
+		b.WriteString(s[:mod])
+	}
+	for i := mod; i < len(s); i += 3 {
+		if b.Len() > 0 {
+			b.WriteByte('.')
+		}
+		b.WriteString(s[i : i+3])
+	}
+	return b.String()
 }
 
 type lincahEnvelope struct {

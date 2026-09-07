@@ -3,7 +3,8 @@
 // daftar kurir, cek ongkir, pesanan lokal + lacak + cetak resi.
 import { useCallback, useEffect, useState } from 'react';
 import {
-  Box, Button, Card, CardContent, Chip, CircularProgress, Divider, Grid,
+  Box, Button, Card, CardContent, Chip, CircularProgress, Dialog, DialogActions,
+  DialogContent, DialogTitle, Divider, Grid,
   MenuItem, Select, TextField, Typography,
   Table, TableBody, TableCell, TableHead, TableRow,
   Alert, List, ListItem, ListItemText,
@@ -58,6 +59,12 @@ export default function LincahPanel({ agentId }: { agentId: number }) {
   const [dims, setDims] = useState('10x10x10');
   const [costs, setCosts] = useState<CostRow[] | null>(null);
   const [ongkirLoading, setOngkirLoading] = useState(false);
+  // Quote cepat (chat-quote): tujuan + berat → teks siap kirim ke pelanggan.
+  const [quickDest, setQuickDest] = useState('');
+  const [quickWeight, setQuickWeight] = useState('1');
+  const [quickText, setQuickText] = useState('');
+  const [quickLoading, setQuickLoading] = useState(false);
+  const [track, setTrack] = useState<any>(null);
 
   const { data: cfgData, refetch: refetchCfg } = useQuery({
     queryKey: ['lincah-config', agentId],
@@ -151,6 +158,47 @@ export default function LincahPanel({ agentId }: { agentId: number }) {
     }
   }, [agentId, originId, destCode, destText, weight, dims, warehouses, qc, refetchOrders]);
 
+  const quickQuote = useCallback(async () => {
+    if (quickDest.trim().length < 3) {
+      setTestError('Ketik tujuan minimal 3 huruf.');
+      return;
+    }
+    setQuickLoading(true);
+    setQuickText('');
+    setTestError(null);
+    try {
+      const r = (await api.post(`/agents/${agentId}/lincah/chat-quote`, {
+        dest: quickDest.trim(),
+        weight_kg: parseFloat(quickWeight || '1') || 1,
+        dimensions: [10, 10, 10],
+      })).data;
+      setQuickText(r?.data?.text ?? '');
+    } catch (e: any) {
+      setTestError(e?.response?.data?.error || String(e));
+    } finally {
+      setQuickLoading(false);
+    }
+  }, [agentId, quickDest, quickWeight]);
+
+  const doTrack = useCallback(async (id: string) => {
+    try {
+      const r = (await api.get(`/agents/${agentId}/lincah/orders/${id}/track`)).data;
+      setTrack(r?.data ?? null);
+    } catch (e: any) {
+      alert('Gagal lacak: ' + (e?.response?.data?.error || String(e)));
+    }
+  }, [agentId]);
+
+  const doPrint = useCallback(async (id: string) => {
+    try {
+      const r = (await api.get(`/agents/${agentId}/lincah/orders/${id}/pdf`)).data;
+      if (r?.pdf_url) window.open(r.pdf_url, '_blank');
+      else alert('PDF belum tersedia dari Lincah.');
+    } catch (e: any) {
+      alert('Gagal cetak: ' + (e?.response?.data?.error || String(e)));
+    }
+  }, [agentId]);
+
   return (
     <Box>
       <Card sx={{ mb: 2 }}>
@@ -217,7 +265,7 @@ export default function LincahPanel({ agentId }: { agentId: number }) {
               <Table size="small">
                 <TableHead>
                   <TableRow>
-                    <TableCell>Resi</TableCell><TableCell>Status</TableCell><TableCell>Kurir</TableCell><TableCell>Biaya</TableCell>
+                    <TableCell>Resi</TableCell><TableCell>Status</TableCell><TableCell>Kurir</TableCell><TableCell>Biaya</TableCell><TableCell></TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -227,13 +275,49 @@ export default function LincahPanel({ agentId }: { agentId: number }) {
                       <TableCell><Chip size="small" label={o.status} /></TableCell>
                       <TableCell>{o.courier}{o.courier_service ? ` · ${o.courier_service}` : ''}</TableCell>
                       <TableCell>{rupiah(o.fee)}</TableCell>
+                      <TableCell>
+                        <Button size="small" onClick={() => doTrack(o.resi || o.lincah_order_id)}>Lacak</Button>
+                        <Button size="small" onClick={() => doPrint(o.lincah_order_id)}>Cetak</Button>
+                      </TableCell>
                     </TableRow>
                   ))}
                   {(orders || []).length === 0 && (
-                    <TableRow><TableCell colSpan={4}>Belum ada pesanan.</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={5}>Belum ada pesanan.</TableCell></TableRow>
                   )}
                 </TableBody>
               </Table>
+            </CardContent>
+          </Card>
+
+          <Card sx={{ mt: 2 }}>
+            <CardContent>
+              <Typography variant="subtitle1">⚡ Quote Cepat (siap salin ke chat)</Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                Ketik tujuan saja (mis. "Bantul") + berat — dapat teks ongkir termurah siap dikirim ke pelanggan.
+              </Typography>
+              <Grid container spacing={1.5}>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <TextField size="small" fullWidth label="Tujuan (mis. Bantul)" value={quickDest}
+                    onChange={(e) => setQuickDest(e.target.value)} />
+                </Grid>
+                <Grid size={{ xs: 6, sm: 3 }}>
+                  <TextField size="small" fullWidth label="Berat (kg)" value={quickWeight}
+                    onChange={(e) => setQuickWeight(e.target.value)} />
+                </Grid>
+                <Grid size={{ xs: 6, sm: 3 }}>
+                  <Button variant="contained" size="small" onClick={quickQuote} disabled={quickLoading}>
+                    {quickLoading ? <CircularProgress size={16} /> : 'Dapatkan Ongkir'}
+                  </Button>
+                </Grid>
+              </Grid>
+              {quickText && (
+                <Alert severity="info" sx={{ mt: 1.5, whiteSpace: 'pre-wrap' }}>
+                  {quickText}
+                  <Box sx={{ mt: 0.5 }}>
+                    <Button size="small" onClick={() => navigator.clipboard?.writeText(quickText)}>Salin</Button>
+                  </Box>
+                </Alert>
+              )}
             </CardContent>
           </Card>
         </Grid>
@@ -298,6 +382,26 @@ export default function LincahPanel({ agentId }: { agentId: number }) {
           </Card>
         </Grid>
       </Grid>
+
+      <Dialog open={!!track} onClose={() => setTrack(null)} maxWidth="sm" fullWidth>
+        <DialogTitle>📍 Lacak {track?.order?.resi || track?.order?.no_order || ''}</DialogTitle>
+        <DialogContent>
+          <List dense>
+            {(track?.data || []).map((ev: any, i: number) => (
+              <ListItem key={i}>
+                <ListItemText
+                  primary={`${ev.status}${ev.message ? ' — ' + ev.message : ''}`}
+                  secondary={ev.time ? new Date(ev.time).toLocaleString('id-ID') : ''}
+                />
+              </ListItem>
+            ))}
+            {(track?.data || []).length === 0 && <Typography variant="body2">Belum ada riwayat status.</Typography>}
+          </List>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setTrack(null)}>Tutup</Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

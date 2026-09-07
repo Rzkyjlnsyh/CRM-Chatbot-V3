@@ -255,6 +255,54 @@ func LincahOrderCancel(c *gin.Context) {
 	c.JSON(200, gin.H{"ok": true})
 }
 
+// LincahSearchDistricts — cari kecamatan (min. 3 huruf) untuk form tujuan.
+func LincahSearchDistricts(c *gin.Context) {
+	agentID, ok := lincahAgentID(c)
+	if !ok {
+		return
+	}
+	q := strings.TrimSpace(c.Query("q"))
+	if len([]rune(q)) < 3 {
+		c.JSON(400, gin.H{"error": "ketik minimal 3 huruf"})
+		return
+	}
+	items, err := services.LincahSearchDistrict(agentID, q)
+	if err != nil {
+		c.JSON(502, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"data": items})
+}
+
+// LincahChatQuote — satu panggilan siap-chat: gudang pertama, tujuan dari
+// teks, tarif semua kurir, teks ringkas. Dipakai tombol 'Cek Ongkir' di chat
+// maupun (nanti) jalur AI.
+func LincahChatQuote(c *gin.Context) {
+	agentID, ok := lincahAgentID(c)
+	if !ok {
+		return
+	}
+	var req struct {
+		Dest       string  `json:"dest"`
+		WeightKg   float64 `json:"weight_kg"`
+		Dimensions []int   `json:"dimensions"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(400, gin.H{"error": "body tidak valid"})
+		return
+	}
+	grams := int64(req.WeightKg * 1000)
+	if grams < 100 {
+		grams = 1000 // default 1 kg bila tak diisi
+	}
+	quote, err := services.LincahQuoteForChat(agentID, req.Dest, grams, req.Dimensions)
+	if err != nil {
+		c.JSON(502, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"data": quote})
+}
+
 // LincahOrderPrint — URL PDF label resi.
 func LincahOrderPrint(c *gin.Context) {
 	agentID, ok := lincahAgentID(c)
