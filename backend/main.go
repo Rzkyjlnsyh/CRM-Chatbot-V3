@@ -196,6 +196,8 @@ func main() {
 			auth.POST("/agents/:id/crm/pipeline/rules/test", handlers.TestLabelRules)
 			// AI Learning Engine (belajar dari CS manusia + real-time)
 			auth.POST("/agents/:id/learning/run", handlers.StartLearning)
+			auth.POST("/agents/:id/learning/clone-profile-to-all", handlers.CloneLearningProfileToAll)
+			auth.POST("/agents/:id/learning/enable-all", handlers.EnableLearningForAll)
 			auth.GET("/agents/:id/learning/status", handlers.GetLearningStatus)
 			auth.GET("/agents/:id/learning/score", handlers.GetLearningScore)
 			auth.GET("/agents/:id/learning/runs", handlers.GetLearningRuns)

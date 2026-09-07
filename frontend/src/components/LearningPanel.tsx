@@ -9,6 +9,7 @@ import {
 import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import HistoryIcon from '@mui/icons-material/History';
 import SettingsIcon from '@mui/icons-material/Settings';
+import CopyAllIcon from '@mui/icons-material/CopyAll';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CancelIcon from '@mui/icons-material/Cancel';
@@ -27,6 +28,7 @@ import {
 } from '../hooks';
 import PageHeader from './PageHeader';
 import { swalConfirm, swalToast } from '../services/swal';
+import api from '../services/api';
 import { apiErrorMessage } from '../services/errors';
 import type { LearningPattern } from '../types';
 
@@ -580,6 +582,38 @@ export default function LearningPanel({ agentId }: { agentId: number }) {
                   </Stack>
                 </Box>
               )}
+            </Stack>
+            <Divider sx={{ my: 2 }} />
+            <Typography variant="subtitle2" sx={{ fontWeight: 800, mb: 1 }}>🌐 Semua Nomor WA Sekaligus</Typography>
+            <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}>
+              <Button size="small" variant="outlined" startIcon={<CopyAllIcon />}
+                onClick={() => swalConfirm(
+                  'Terapkan profil ini ke SEMUA nomor WA?',
+                  'Persona, knowledge, dan konfigurasi learning agent ini akan disalin ke semua agent lain di akun ini.',
+                ).then((ok) => {
+                  if (!ok) return;
+                  api.post(`/agents/${agentId}/learning/clone-profile-to-all`).then((r) => {
+                    swalToast(r.data?.message || `Disalin ke ${r.data?.copied ?? 0} agent`);
+                  }).catch((e) => swalToast(apiErrorMessage(e, 'Gagal menyalin profil'), 'error'));
+                })}>
+                Salin Profil Ini ke Semua Agent
+              </Button>
+              <Button size="small" variant="contained" startIcon={<PlayArrowIcon />}
+                onClick={() => swalConfirm(
+                  'Aktifkan AI Learning untuk SEMUA nomor WA?',
+                  config?.auto_apply
+                    ? 'Learning + jadwal otomatis + auto-apply akan diaktifkan untuk semua agent di akun ini.'
+                    : 'Learning + jadwal otomatis diaktifkan untuk semua agent (tanpa auto-apply).',
+                ).then((ok) => {
+                  if (!ok) return;
+                  api.post(`/agents/${agentId}/learning/enable-all`, {
+                    auto_apply: !!config?.auto_apply,
+                    schedule_enabled: true,
+                  }).then((r) => swalToast(r.data?.message || `Aktif untuk ${r.data?.enabled ?? 0} agent`))
+                    .catch((e) => swalToast(apiErrorMessage(e, 'Gagal mengaktifkan massal'), 'error'));
+                })}>
+                Aktifkan Learning Semua Agent
+              </Button>
             </Stack>
           </Paper>
         </Stack>
