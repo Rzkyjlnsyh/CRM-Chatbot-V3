@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"strings"
 	"sync"
@@ -409,4 +410,76 @@ func generateAIFollowUpMsg(agentID uint, number, name string, step models.Follow
 	}
 	log.Printf("FollowUp AI: generated untuk %s (%d chars)", number, len(reply))
 	return reply, true
+}
+
+// ---------------------------------------------------------------------------
+// Follow-up Helpers Baru (v4 — ported dari chatloop-1.6-1.7)
+// ---------------------------------------------------------------------------
+
+// normalizeFollowUpSteps memvalidasi dan menormalisasi slice steps sebelum disimpan.
+// Pola v4: trim pesan & instruksi, instruksi AI mengisi Message bila AiGenerated,
+// delay tak boleh negatif, urutan waktu harus menaik, langkah kosong dibuang.
+func normalizeFollowUpSteps(steps []followUpStepReq) ([]followUpStepReq, error) {
+	const maxSteps = 20
+	normalized := make([]followUpStepReq, 0, len(steps))
+	previousDelay := -1
+	for _, raw := range steps {
+		step := raw
+		step.Message = strings.TrimSpace(step.Message)
+		step.AiInstruction = strings.TrimSpace(step.AiInstruction)
+		if step.AiGenerated {
+			if step.AiInstruction == "" {
+				step.AiInstruction = step.Message
+			}
+			step.Message = step.AiInstruction
+		} else {
+			step.AiInstruction = ""
+		}
+		if step.Message == "" {
+			continue
+		}
+		if step.DelayHours < 0 {
+			return nil, fmt.Errorf("jeda tidak boleh negatif")
+		}
+		if previousDelay > step.DelayHours {
+			return nil, fmt.Errorf("waktu langkah harus berurutan dari paling awal")
+		}
+		previousDelay = step.DelayHours
+		normalized = append(normalized, step)
+	}
+	if len(normalized) == 0 {
+		return nil, fmt.Errorf("minimal satu langkah follow-up dengan pesan")
+	}
+	if len(normalized) > maxSteps {
+		return nil, fmt.Errorf("maksimal %d langkah follow-up", maxSteps)
+	}
+	return normalized, nil
+}
+
+// stopActiveFollowUps menghentikan semua enrollment aktif untuk kontak (sender)
+// pada agent tertentu. Dipakai saat customer membalas (stop_on_reply) atau
+// saat CS secara manual menghentikan follow-up.
+func stopActiveFollowUps(agentID uint, sender string) int64 {
+	res := database.DB.Model(&models.FollowUpEnrollment{}).
+		Where("agent_id = ? AND sender = ? AND status = ?", agentID, sender, "active").
+		Update("status", "stopped")
+	if res.Error != nil {
+		log.Printf("[followup] gagal stop follow-up untuk %s agent %d: %v", sender, agentID, res.Error)
+		return 0
+	}
+	if res.RowsAffected > 0 {
+		log.Printf("[followup] %d enrollment dihentikan untuk %s (agent %d)", res.RowsAffected, sender, agentID)
+	}
+	return res.RowsAffected
+}
+
+// fallbackAIFollowUpMessage = pesan pengganti bila AI gagal generate follow-up.
+// PENTING: TIDAK BOLEH membocorkan instruksi internal (AiInstruction) — pesan
+// fallback selalu generik & ramah, memakai nama penerima bila ada (pola v4).
+func fallbackAIFollowUpMessage(name string) string {
+	greeting := "Halo Kak"
+	if cleanName := strings.TrimSpace(name); cleanName != "" {
+		greeting = "Halo " + cleanName
+	}
+	return greeting + ", kami ingin menindaklanjuti percakapan sebelumnya. Apakah masih ada yang bisa kami bantu?"
 }

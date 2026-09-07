@@ -19,6 +19,10 @@ type Agent struct {
 	AIReplyDelayMax int    `gorm:"not null;default:8" json:"ai_reply_delay_max"`
 	DeviceJID       string `json:"device_jid"`
 	Number          string `json:"number"`
+	// InboxOwnerNumber tetap disimpan saat logout. Kolom ini dipakai untuk
+	// mendeteksi bila slot agent yang sama ditautkan ke akun WhatsApp berbeda,
+	// sehingga riwayat lokal akun lama tidak tercampur dengan akun baru.
+	InboxOwnerNumber string `gorm:"size:32;index" json:"inbox_owner_number,omitempty"`
 
 	GreetingEnabled bool   `gorm:"not null;default:false" json:"greeting_enabled"`
 	GreetingMessage string `gorm:"type:text" json:"greeting_message"`
@@ -39,12 +43,12 @@ type Agent struct {
 	SheetSyncEnabled     bool   `gorm:"not null;default:false" json:"sheet_sync_enabled"`
 
 	// Cek ongkir realtime via Mengantar API + RajaOngkir (fallback).
-	OriginCityID               int    `gorm:"default:0" json:"origin_city_id"`
-	OriginCityName             string `gorm:"size:100" json:"origin_city_name"`
-	DefaultWeightGram          int    `gorm:"default:1000" json:"default_weight_gram"`
-	EnabledCouriers            string `gorm:"size:100;default:'JNE,JT'" json:"enabled_couriers"`
-	MengantarOriginAutofillID  string `gorm:"size:30" json:"mengantar_origin_autofill_id"`  // PICKUP_AUTOFILL dari Mengantar
-	MengantarOriginAddressID   string `gorm:"size:30" json:"mengantar_origin_address_id"`   // _id saved address Mengantar
+	OriginCityID              int    `gorm:"default:0" json:"origin_city_id"`
+	OriginCityName            string `gorm:"size:100" json:"origin_city_name"`
+	DefaultWeightGram         int    `gorm:"default:1000" json:"default_weight_gram"`
+	EnabledCouriers           string `gorm:"size:100;default:'JNE,JT'" json:"enabled_couriers"`
+	MengantarOriginAutofillID string `gorm:"size:30" json:"mengantar_origin_autofill_id"` // PICKUP_AUTOFILL dari Mengantar
+	MengantarOriginAddressID  string `gorm:"size:30" json:"mengantar_origin_address_id"`  // _id saved address Mengantar
 
 	// REST API publik + Webhook (per-nomor). APIKey & WebhookSecret tidak pernah
 	// diserialkan ke JSON (json:"-") — hanya ditampilkan tersamar / sekali saat dibuat.
@@ -56,58 +60,79 @@ type Agent struct {
 }
 
 type ChatHistory struct {
-	ID                      uint       `gorm:"primaryKey" json:"id"`
-	AgentID                 uint       `gorm:"index" json:"agent_id"`
-	Sender                  string     `gorm:"index;size:32" json:"sender"`
-	Message                 string     `json:"message"`
-	Reply                   string     `json:"reply"`
-	FromHuman               bool       `gorm:"not null;default:false" json:"from_human"`
-	MediaType               string     `gorm:"size:16" json:"media_type"`
-	MediaPath               string     `json:"-"`
-	FileName                string     `json:"file_name"`
-	Mimetype                string     `json:"mimetype"`
-	ImageAnalysis           string     `gorm:"type:text" json:"image_analysis,omitempty"`
-	ImageAnalysisStatus     string     `gorm:"size:24;index" json:"image_analysis_status,omitempty"` // completed, failed
-	ImageAnalysisModel      string     `gorm:"size:120" json:"image_analysis_model,omitempty"`
-	ImageAnalysisConfidence float64    `json:"image_analysis_confidence,omitempty"`
-	ImageAnalysisAnswer     string     `gorm:"type:text" json:"image_analysis_answer,omitempty"`
-	ImageAnalysisProductID  uint       `gorm:"index" json:"image_analysis_product_id,omitempty"`
-	ImageAnalysisNeedsHuman bool       `gorm:"not null;default:false;index" json:"image_analysis_needs_human,omitempty"`
-	WAMsgID                 string     `gorm:"size:64" json:"wa_msg_id"`
-	ReplyTo                 string     `json:"reply_to"`
-	ReplyText               string     `gorm:"size:200" json:"reply_text"`
-	Revoked                 bool       `gorm:"default:false" json:"revoked"`
-	DeliveryStatus          string     `gorm:"size:24;index;default:sent" json:"delivery_status"` // sent, pending_retry, failed_send
-	SendError               string     `gorm:"type:text" json:"send_error,omitempty"`
-	RetryCount              int        `gorm:"not null;default:0" json:"retry_count"`
-	NextRetryAt             *time.Time `gorm:"index" json:"next_retry_at,omitempty"`
-	CreatedAt               time.Time  `json:"created_at"`
+	// ID + compound indexes untuk cursor-based pagination inbox realtime (v4).
+	ID      uint   `gorm:"primaryKey;index:idx_chat_agent_live_cursor,priority:3" json:"id"`
+	AgentID uint   `gorm:"index;index:idx_chat_agent_live_cursor,priority:1;index:idx_chat_agent_wa_msg,priority:1;index:idx_chat_agent_sender_time,priority:1" json:"agent_id"`
+	Sender  string `gorm:"index;size:32;index:idx_chat_agent_sender_time,priority:2" json:"sender"`
+	Message string `json:"message"`
+	Reply   string `json:"reply"`
+	// FromHuman: true = balasan CS manusia (via inbox atau device). Dipakai Learning.
+	FromHuman bool `gorm:"not null;default:false" json:"from_human"`
+	// LiveIncoming: true = pesan live (bukan dari history sync). Dipakai cursor
+	// realtime inbox agar pesan impor lama tidak mengganggu urutan live.
+	LiveIncoming bool   `gorm:"not null;default:false;index:idx_chat_agent_live_cursor,priority:2" json:"-"`
+	MediaType    string `gorm:"size:16" json:"media_type"`
+	MediaPath    string `json:"-"`
+	// MediaMetadata = protobuf pesan riwayat (HistorySync) untuk unduh media on-demand.
+	// MediaFetchStatus = pending | done | failed.
+	MediaMetadata    []byte `gorm:"type:blob" json:"-"`
+	MediaFetchStatus string `gorm:"size:24" json:"media_fetch_status,omitempty"`
+	FileName         string `json:"file_name"`
+	Mimetype         string `json:"mimetype"`
+
+	ImageAnalysis           string  `gorm:"type:text" json:"image_analysis,omitempty"`
+	ImageAnalysisStatus     string  `gorm:"size:24;index" json:"image_analysis_status,omitempty"` // completed, failed
+	ImageAnalysisModel      string  `gorm:"size:120" json:"image_analysis_model,omitempty"`
+	ImageAnalysisConfidence float64 `json:"image_analysis_confidence,omitempty"`
+	ImageAnalysisAnswer     string  `gorm:"type:text" json:"image_analysis_answer,omitempty"`
+	ImageAnalysisProductID  uint    `gorm:"index" json:"image_analysis_product_id,omitempty"`
+	ImageAnalysisNeedsHuman bool    `gorm:"not null;default:false;index" json:"image_analysis_needs_human,omitempty"`
+
+	WAMsgID   string `gorm:"size:64;index:idx_chat_agent_wa_msg,priority:2" json:"wa_msg_id"`
+	ReplyTo   string `json:"reply_to"`
+	ReplyText string `gorm:"size:200" json:"reply_text"`
+	Revoked   bool   `gorm:"default:false" json:"revoked"`
+	// DeliveryStatus: sent | delivered | read | read_inferred | played | pending_retry | failed_send
+	DeliveryStatus string `gorm:"size:24;index;default:sent" json:"delivery_status"`
+	SendError      string `gorm:"type:text" json:"send_error,omitempty"`
+	RetryCount     int    `gorm:"not null;default:0" json:"retry_count"`
+	// ReplySource membedakan asal balasan: "ai" (default), "human_device",
+	// "human_inbox", "history_sync" (import riwayat WA). Dipakai Learning agar
+	// riwayat impor TIDAK dihitung sebagai materi belajar.
+	ReplySource string `gorm:"size:24;default:ai" json:"reply_source,omitempty"`
+
+	NextRetryAt *time.Time `gorm:"index" json:"next_retry_at,omitempty"`
+	CreatedAt   time.Time  `gorm:"index:idx_chat_agent_sender_time,priority:3" json:"created_at"`
+
+	// Virtual fields — tidak disimpan di DB, di-set oleh handler saat serialisasi.
+	MediaAvailable    bool `gorm:"-" json:"media_available"`
+	MediaDownloadable bool `gorm:"-" json:"media_downloadable"`
 }
 
 type AITurn struct {
-	ID                 uint      `gorm:"primaryKey" json:"id"`
-	AgentID            uint      `gorm:"index;not null" json:"agent_id"`
-	Sender             string    `gorm:"index;size:32" json:"sender"`
-	UserMessage        string    `gorm:"type:text" json:"user_message"`
-	AIReply            string    `gorm:"type:text" json:"ai_reply"`
-	Model              string    `gorm:"size:80" json:"model"`
-	PromptVersion      string    `gorm:"size:40;default:'legacy';index" json:"prompt_version"`
-	KnowledgeUsedCount int       `json:"knowledge_used_count"`
-	KnowledgeIDs       string    `gorm:"size:255" json:"knowledge_ids"` // "12,45,90"
-	TopSimilarity      float64   `json:"top_similarity"`               // 0..1, 0 bila keyword-only
-	AnswerOverlap      float64   `json:"answer_overlap"`               // 0..1 overlap jawaban vs knowledge
-	ProductUsedCount   int       `json:"product_used_count"`
-	ProductIDs         string    `gorm:"size:255" json:"product_ids"`
-	RetrievalMode      string    `gorm:"size:24;index" json:"retrieval_mode"` // none|keyword|semantic|hybrid
+	ID                 uint    `gorm:"primaryKey" json:"id"`
+	AgentID            uint    `gorm:"index;not null" json:"agent_id"`
+	Sender             string  `gorm:"index;size:32" json:"sender"`
+	UserMessage        string  `gorm:"type:text" json:"user_message"`
+	AIReply            string  `gorm:"type:text" json:"ai_reply"`
+	Model              string  `gorm:"size:80" json:"model"`
+	PromptVersion      string  `gorm:"size:40;default:'legacy';index" json:"prompt_version"`
+	KnowledgeUsedCount int     `json:"knowledge_used_count"`
+	KnowledgeIDs       string  `gorm:"size:255" json:"knowledge_ids"` // "12,45,90"
+	TopSimilarity      float64 `json:"top_similarity"`                // 0..1, 0 bila keyword-only
+	AnswerOverlap      float64 `json:"answer_overlap"`                // 0..1 overlap jawaban vs knowledge
+	ProductUsedCount   int     `json:"product_used_count"`
+	ProductIDs         string  `gorm:"size:255" json:"product_ids"`
+	RetrievalMode      string  `gorm:"size:24;index" json:"retrieval_mode"` // none|keyword|semantic|hybrid
 	// RetrievalQuery = query efektif ke knowledge (bukan selalu sama dengan user_message).
-	RetrievalQuery    string `gorm:"type:text" json:"retrieval_query"`
-	GroundingRetried  bool   `gorm:"not null;default:false" json:"grounding_retried"`
-	GroundingFallback bool   `gorm:"not null;default:false;index" json:"grounding_fallback"`
-	UsedShippingTool   bool      `gorm:"not null;default:false;index" json:"used_shipping_tool"`
-	Escalated          bool      `gorm:"not null;default:false;index" json:"escalated"`
-	Error              string    `gorm:"type:text" json:"error"`
-	LatencyMs          int64     `json:"latency_ms"`
-	CreatedAt          time.Time `gorm:"index" json:"created_at"`
+	RetrievalQuery    string    `gorm:"type:text" json:"retrieval_query"`
+	GroundingRetried  bool      `gorm:"not null;default:false" json:"grounding_retried"`
+	GroundingFallback bool      `gorm:"not null;default:false;index" json:"grounding_fallback"`
+	UsedShippingTool  bool      `gorm:"not null;default:false;index" json:"used_shipping_tool"`
+	Escalated         bool      `gorm:"not null;default:false;index" json:"escalated"`
+	Error             string    `gorm:"type:text" json:"error"`
+	LatencyMs         int64     `json:"latency_ms"`
+	CreatedAt         time.Time `gorm:"index" json:"created_at"`
 }
 
 func (AITurn) TableName() string { return "ai_turns" }
@@ -173,7 +198,11 @@ type Knowledge struct {
 	EmbeddingModel string `gorm:"size:80" json:"-"`
 	// Source = asal knowledge: manual, wizard, web, dokumen. SourceURL = URL halaman asal (untuk web).
 	// Dipakai mengelompokkan & menghapus knowledge per sumber (mis. hapus semua dari 1 website).
-	Source    string    `gorm:"size:16;default:manual;index" json:"source"`
+	Source string `gorm:"size:16;default:manual;index" json:"source"`
+	// ImagePath/ImageMime: gambar pendukung KB (pola v4) — ditampilkan di UI
+	// dan dilampirkan saat AI menjelaskan produk/FAQ bergambar.
+	ImagePath string    `gorm:"type:text" json:"image_path,omitempty"`
+	ImageMime string    `gorm:"size:64" json:"image_mime,omitempty"`
 	SourceURL string    `gorm:"type:text" json:"source_url"`
 	CharCount int       `gorm:"not null;default:0" json:"char_count"` // panjang Answer, untuk hitung kuota karakter
 	CreatedAt time.Time `json:"created_at"`
@@ -226,19 +255,85 @@ type CrawlPage struct {
 }
 
 type User struct {
-	ID                  uint       `gorm:"primaryKey" json:"id"`
-	Username            string     `gorm:"uniqueIndex;size:64;not null" json:"username"`
-	Password            string     `json:"-"`
-	Role                string     `gorm:"size:24;default:owner" json:"role"`
-	Name                string     `json:"name"`
-	Email               string     `gorm:"size:255" json:"email"`
-	EmailVerified       bool       `gorm:"default:false" json:"email_verified"`
-	EmailVerifyToken    string     `gorm:"size:128" json:"-"`
-	Phone               string     `gorm:"size:32;index" json:"phone"`
-	TenantID            *uint      `gorm:"index" json:"tenant_id"`
-	IsSuperAdmin        bool       `gorm:"default:false" json:"is_super_admin"`
+	ID               uint   `gorm:"primaryKey" json:"id"`
+	Username         string `gorm:"uniqueIndex;size:64;not null" json:"username"`
+	Password         string `json:"-"`
+	Role             string `gorm:"size:24;default:owner" json:"role"`
+	Name             string `json:"name"`
+	Email            string `gorm:"size:255" json:"email"`
+	EmailVerified    bool   `gorm:"default:false" json:"email_verified"`
+	EmailVerifyToken string `gorm:"size:128" json:"-"`
+	Phone            string `gorm:"size:32;index" json:"phone"`
+	TenantID         *uint  `gorm:"index" json:"tenant_id"`
+	IsSuperAdmin     bool   `gorm:"default:false" json:"is_super_admin"`
+	// Active: CS user bisa dinonaktifkan tanpa hapus akun.
+	Active bool `gorm:"not null;default:true" json:"active"`
+	// IsCSOnly: true = akun CS terbatas (tidak bisa akses semua fitur admin).
+	IsCSOnly            bool       `gorm:"not null;default:false" json:"-"`
 	PasswordResetToken  string     `gorm:"size:128" json:"-"`
 	PasswordResetExpiry *time.Time `json:"-"`
+}
+
+// ---------------------------------------------------------------------------
+// Inbox Real-time Infrastructure (v4 — ported dari chatloop-1.6-1.7)
+// ---------------------------------------------------------------------------
+
+// InboxReadState melacak status baca per-percakapan (sender) per agent.
+// Dipakai untuk badge unread yang akurat dan sinkronisasi dengan WhatsApp.
+
+// SenderAlias merekam asosiasi identitas LID → nomor asli (PN) yang dipelajari
+// dari pesan live WhatsApp (SenderAlt). Tanpa mapping di store WA, HP utama
+// tetap mengirim nomor asli sesekali — asosiasi itu direkam di sini sehingga
+// riwayat yang tersimpan di bawah LID bisa disatukan ke satu identitas.
+type SenderAlias struct {
+	ID        uint      `gorm:"primaryKey" json:"id"`
+	AgentID   uint      `gorm:"uniqueIndex:idx_sender_alias_agent_lid;not null" json:"agent_id"`
+	LID       string    `gorm:"column:lid;type:varchar(32);uniqueIndex:idx_sender_alias_agent_lid;not null" json:"lid"`
+	PN        string    `gorm:"index" json:"pn"`
+	CreatedAt time.Time `json:"created_at"`
+}
+type InboxReadState struct {
+	ID      uint   `gorm:"primaryKey" json:"id"`
+	AgentID uint   `gorm:"uniqueIndex:idx_inbox_read_agent_sender,priority:1;not null" json:"agent_id"`
+	Sender  string `gorm:"uniqueIndex:idx_inbox_read_agent_sender,priority:2;size:32;not null" json:"sender"`
+
+	// WhatsAppSynced: sudah pernah mendapat event dari WA (bukan hanya dari DB lokal).
+	WhatsAppSynced bool `gorm:"not null;default:false" json:"whats_app_synced"`
+	// WhatsAppUnreadCount: jumlah pesan belum dibaca sesuai WA (incremental).
+	WhatsAppUnreadCount int `gorm:"not null;default:0" json:"whats_app_unread_count"`
+	// WhatsAppStateAt: timestamp event WA terakhir yang diproses (untuk ordering).
+	WhatsAppStateAt *time.Time `gorm:"index" json:"whats_app_state_at,omitempty"`
+	// LastReadAt: kapan terakhir CS mark-read (dari inbox dashboard).
+	LastReadAt *time.Time `gorm:"index" json:"last_read_at,omitempty"`
+	// LastMsgAt: timestamp pesan terakhir — untuk urutan kontak di inbox.
+	LastMsgAt *time.Time `gorm:"index" json:"last_msg_at,omitempty"`
+	UpdatedAt time.Time  `json:"updated_at"`
+}
+
+// ---------------------------------------------------------------------------
+// Team CS Management (v4 — ported dari chatloop-1.6-1.7)
+// ---------------------------------------------------------------------------
+
+// UserAgentAssignment menghubungkan akun CS (User) ke agent/nomor WA tertentu.
+// CS hanya bisa lihat dan balas percakapan dari agent yang di-assign kepadanya.
+type UserAgentAssignment struct {
+	ID       uint `gorm:"primaryKey"`
+	TenantID uint `gorm:"uniqueIndex:idx_user_agent_assign,priority:1;not null"`
+	UserID   uint `gorm:"uniqueIndex:idx_user_agent_assign,priority:2;not null"`
+	AgentID  uint `gorm:"uniqueIndex:idx_user_agent_assign,priority:3;not null"`
+}
+
+// CSActivityLog mencatat aktivitas CS untuk keperluan audit dan monitoring.
+type CSActivityLog struct {
+	ID       uint `gorm:"primaryKey" json:"id"`
+	TenantID uint `gorm:"index;not null" json:"tenant_id"`
+	UserID   uint `gorm:"index;not null" json:"user_id"`
+	AgentID  uint `gorm:"index;not null" json:"agent_id"`
+	// Action: login | reply | handoff | read | close | etc.
+	Action    string    `gorm:"size:32;not null" json:"action"`
+	Sender    string    `gorm:"size:32" json:"sender,omitempty"`
+	Meta      string    `gorm:"type:text" json:"meta,omitempty"`
+	CreatedAt time.Time `gorm:"index" json:"created_at"`
 }
 
 // LoginThrottle menyimpan rate-limit login secara persistent agar tidak hilang saat restart.

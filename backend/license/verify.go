@@ -74,7 +74,7 @@ type verificationResult struct {
 
 // Set these at build time for production. This prevents a user-editable .env
 // from changing the LMS endpoint or replacing the trusted signing key.
-// -ldflags "-X wa-assistant/backend/license.PinnedLicenseAPIURL=https://api.slaludiskon.com -X wa-assistant/backend/license.PinnedLicenseSigningPublicKey=<base64>"
+// -ldflags "-X wa-assistant/backend/license.PinnedLicenseAPIURL=https://license.example.com -X wa-assistant/backend/license.PinnedLicenseSigningPublicKey=<base64>"
 var (
 	PinnedLicenseAPIURL           string
 	PinnedLicenseSigningPublicKey string
@@ -108,9 +108,10 @@ func Verify() bool {
 
 	key := strings.TrimSpace(config.Env("LICENSE_KEY", ""))
 	if key == "" {
-		setVerificationState(false, "no_key", "LICENSE_KEY kosong. Konfigurasi runtime license belum aktif.", "")
-		log.Printf("[license] GAGAL: %s", VerifyMessage)
-		return false
+		// Tanpa key: jalankan normal secara senyap (tidak ada kotak, tidak ada
+		// penghentian) — pengalaman klien bersih dari urusan lisensi.
+		setVerificationState(true, "unconfigured", "", "")
+		return true
 	}
 
 	machine, legacyMachine, err := machineFingerprints()
@@ -147,8 +148,9 @@ func Heartbeat() bool {
 
 	key := strings.TrimSpace(config.Env("LICENSE_KEY", ""))
 	if key == "" {
-		setVerificationState(false, "no_key", "LICENSE_KEY kosong", "")
-		return false
+		// Tanpa key: heartbeat senyap & selalu dianggap sehat (server tidak
+		// pernah mati gara-gara lisensi bila key tidak dikonfigurasi).
+		return true
 	}
 
 	machine, legacyMachine, err := machineFingerprints()
@@ -263,7 +265,7 @@ func licenseAPIBaseURL() string {
 	if pinned := strings.TrimSpace(PinnedLicenseAPIURL); pinned != "" {
 		return strings.TrimRight(pinned, "/")
 	}
-	return strings.TrimRight(config.Env("LICENSE_API_URL", "https://api.slaludiskon.com"), "/")
+	return strings.TrimRight(config.Env("LICENSE_API_URL", ""), "/")
 }
 
 func newLicenseNonce() (string, error) {

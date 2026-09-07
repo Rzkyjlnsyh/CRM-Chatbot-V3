@@ -76,6 +76,8 @@ export interface ChatMsg {
   media_type: string; // "", image, document, audio, video, sticker
   file_name: string;
   mimetype: string;
+  media_path?: string;
+  media_fetch_status?: 'pending' | 'done' | 'failed' | string;
   image_analysis?: string;
   image_analysis_status?: 'completed' | 'failed' | string;
   image_analysis_model?: string;
@@ -87,6 +89,7 @@ export interface ChatMsg {
   reply_to?: string;
   reply_text?: string;
   revoked?: boolean;
+  delivery_status?: 'sent' | 'delivered' | 'read' | 'read_inferred' | 'played' | string;
   created_at: string;
 }
 
@@ -314,6 +317,10 @@ export interface Template {
   id: number;
   title: string;
   body: string;
+  media_type?: string;
+  media_path?: string;
+  file_name?: string;
+  mimetype?: string;
   sort_order: number;
 }
 
@@ -732,6 +739,15 @@ export interface LearningSnapshot {
   created_at: string;
 }
 
+// LearningPatternPage = halaman pola (pagination) — total = jumlah SELURUH
+// pola pada status tsb, bukan hanya halaman ini.
+export interface LearningPatternPage {
+  patterns: LearningPattern[];
+  total: number;
+  page: number;
+  limit: number;
+}
+
 export interface LearningConfig {
   id: number;
   agent_id: number;
@@ -807,9 +823,13 @@ export interface MetaConfigData {
   graph_version: string;
   test_event_code: string;
   configured: boolean;
+  token_configured?: boolean;
   conv_labels: string;
   event_name: string;
   label_events: Record<string, string>;
+  conv_value: string;
+  currency: string;
+  standard_events: string[];
   stats?: MetaStats;
 }
 
@@ -845,3 +865,46 @@ export interface PipelineData {
   config: { smart_labels_enabled: boolean; closing_definition: string };
   rules: LabelRule[];
 }
+
+// --- Team CS Management (v4) ---
+
+export interface TeamUser {
+  id: number;
+  username: string;
+  name: string;
+  email: string;
+  phone: string;
+  active: boolean;
+  is_cs_only: boolean;
+  agent_ids: number[]; // agent yang di-assign ke CS ini
+}
+
+export interface CSActivityLog {
+  id: number;
+  tenant_id: number;
+  user_id: number;
+  agent_id: number;
+  action: string; // login | reply | handoff | read | close | etc.
+  sender: string;
+  meta: string;
+  created_at: string;
+  user_name: string; // di-enrich oleh backend
+}
+
+export interface CreateTeamUserRequest {
+  username: string;
+  password: string;
+  name: string;
+  email?: string;
+  phone?: string;
+  agent_ids: number[];
+}
+
+export interface UpdateTeamUserRequest {
+  name?: string;
+  password?: string;
+  phone?: string;
+  active?: boolean;
+  agent_ids?: number[];
+}
+

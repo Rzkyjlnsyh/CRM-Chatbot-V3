@@ -21,6 +21,24 @@ const (
 	metaEventNameKey  = "meta_event_name"  // event default (mis. Purchase)
 )
 
+// metaCurrency = mata uang konversi (default IDR).
+func metaCurrency() string {
+	if c := strings.TrimSpace(database.GetAppSetting("meta_currency", "IDR")); c != "" {
+		return c
+	}
+	return "IDR"
+}
+
+// metaConvValue = nilai konversi tetap (fallback bila closing tak ada jumlah).
+func metaConvValue() float64 {
+	raw := strings.TrimSpace(database.GetAppSetting("meta_conv_value", ""))
+	if raw == "" {
+		return 0
+	}
+	v, _ := strconv.ParseFloat(raw, 64)
+	return v
+}
+
 // MetaEventForLabel memetakan label → event Meta (dari setting global).
 func MetaEventForLabel(labelID, fallback string) string {
 	raw := database.GetAppSetting("meta_label_events", "")
@@ -71,9 +89,11 @@ func FireMetaConversion(agentID uint, sender, labelID string) {
 		if existing.ID > 0 {
 			return // sudah pernah dikirim
 		}
-		customData := map[string]any{"currency": "IDR"}
+		customData := map[string]any{"currency": metaCurrency()}
 		if v := metaPurchaseValue(agentID, sender); v > 0 {
 			customData["value"] = v
+		} else if cv := metaConvValue(); cv > 0 {
+			customData["value"] = cv
 		}
 		ev := MetaEventInput{
 			EventID:    eventID,

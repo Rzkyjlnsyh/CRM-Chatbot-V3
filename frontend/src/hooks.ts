@@ -1,6 +1,7 @@
+import { useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from './services/api';
-import type { Analytics, AIMetrics, Contact, ChatMsg, ConversationBrief, Broadcast, BroadcastDetailData, BroadcastSafetyForm, BroadcastConsentSummary, WAGroup, GroupGuardConfig, GroupModerationLog, LabelInfo, ScheduledMessage, AutoReply, Template, SavedContact, SavedContactsResp, LeadStage, FollowUp, Agent, KnowledgeItem, Handoff, CrawlJob, CrawlPage, KnowledgeUsage, ScheduledStatus, ApiSettings, Flow, Product, ProductOrder, AIForm, AIFormSubmission, MediaAsset, LearningStatus, LearningScore, LearningRun, LearningRunDetail, LearningPattern, LearningSnapshot, LearningConfig, MetaConfigData, LeadStageDef, LabelRule, PipelineData } from './types';
+import type { Analytics, AIMetrics, Contact, ChatMsg, ConversationBrief, Broadcast, BroadcastDetailData, BroadcastSafetyForm, BroadcastConsentSummary, WAGroup, GroupGuardConfig, GroupModerationLog, LabelInfo, ScheduledMessage, AutoReply, Template, SavedContact, SavedContactsResp, LeadStage, FollowUp, Agent, KnowledgeItem, Handoff, CrawlJob, CrawlPage, KnowledgeUsage, ScheduledStatus, ApiSettings, Flow, Product, ProductOrder, AIForm, AIFormSubmission, MediaAsset, LearningStatus, LearningScore, LearningRun, LearningRunDetail, LearningPatternPage, LearningSnapshot, LearningConfig, MetaConfigData, LeadStageDef, LabelRule, PipelineData, TeamUser, CSActivityLog, CreateTeamUserRequest, UpdateTeamUserRequest } from './types';
 
 type ContactList = { number: string; name: string }[];
 
@@ -31,11 +32,11 @@ export function useContacts(agentId: number, labelId?: string) {
   return useQuery<Contact[]>({
     queryKey: ['contacts', agentId, labelId || ''],
     queryFn: async () => (await api.get(`/agents/${agentId}/contacts`, { params: labelId ? { label_id: labelId } : {} })).data.data,
+    staleTime: 10_000,
     enabled: !!agentId,
     // Poll lebih longgar: list kontak tidak perlu real-time ketat.
     refetchInterval: 12_000,
     refetchIntervalInBackground: false,
-    staleTime: 5_000,
     placeholderData: (prev) => prev,
   });
 }
@@ -377,10 +378,21 @@ export function useTemplates(agentId: number) {
 export function useSaveTemplate(agentId: number) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (t: Partial<Template>) =>
-      t.id
+    mutationFn: async (t: Partial<Template> & { file?: File | null }) => {
+      // Lampiran → multipart/form-data; tanpa file → JSON (kompatibel).
+      if (t.file) {
+        const fd = new FormData();
+        fd.append('title', t.title || '');
+        fd.append('body', t.body || '');
+        fd.append('file', t.file);
+        return t.id
+          ? (await api.put(`/agents/${agentId}/templates/${t.id}`, fd)).data
+          : (await api.post(`/agents/${agentId}/templates`, fd)).data;
+      }
+      return t.id
         ? (await api.put(`/agents/${agentId}/templates/${t.id}`, t)).data
-        : (await api.post(`/agents/${agentId}/templates`, t)).data,
+        : (await api.post(`/agents/${agentId}/templates`, t)).data;
+    },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['templates', agentId] }),
   });
 }
@@ -819,8 +831,17 @@ export function useAgentDisconnect(agentId: number) {
 export function useAddKnowledge(agentId: number) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (body: { question: string; answer: string; tags: string }) =>
-      (await api.post(`/agents/${agentId}/knowledge`, body)).data as { data: KnowledgeItem; merged: boolean },
+    mutationFn: async (body: { question: string; answer: string; tags: string; file?: File | null }) => {
+      if (body.file) {
+        const fd = new FormData();
+        fd.append('question', body.question);
+        fd.append('answer', body.answer);
+        fd.append('tags', body.tags);
+        fd.append('image', body.file);
+        return (await api.post(`/agents/${agentId}/knowledge`, fd)).data as { data: KnowledgeItem; merged: boolean };
+      }
+      return (await api.post(`/agents/${agentId}/knowledge`, body)).data as { data: KnowledgeItem; merged: boolean };
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['agent', agentId, 'knowledge'] });
       qc.invalidateQueries({ queryKey: ['agent', agentId, 'knowledge-usage'] });
@@ -842,8 +863,17 @@ export function useDeleteKnowledge(agentId: number) {
 export function useUpdateKnowledge(agentId: number) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (body: { id: number; question: string; answer: string; tags: string }) =>
-      (await api.put(`/agents/${agentId}/knowledge/${body.id}`, body)).data,
+    mutationFn: async (body: { id: number; question: string; answer: string; tags: string; file?: File | null }) => {
+      if (body.file) {
+        const fd = new FormData();
+        fd.append('question', body.question);
+        fd.append('answer', body.answer);
+        fd.append('tags', body.tags);
+        fd.append('image', body.file);
+        return (await api.put(`/agents/${agentId}/knowledge/${body.id}`, fd)).data;
+      }
+      return (await api.put(`/agents/${agentId}/knowledge/${body.id}`, body)).data;
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['agent', agentId, 'knowledge'] });
       qc.invalidateQueries({ queryKey: ['agent', agentId, 'knowledge-usage'] });
@@ -1153,10 +1183,10 @@ export function useLearningRun(agentId: number, runId: number) {
   });
 }
 
-export function useLearningPatterns(agentId: number, status?: string) {
-  return useQuery<LearningPattern[]>({
-    queryKey: ['learning-patterns', agentId, status],
-    queryFn: async () => (await api.get(`/agents/${agentId}/learning/patterns`, { params: status ? { status } : {} })).data.data,
+export function useLearningPatterns(agentId: number, status?: string, page = 1, limit = 50) {
+  return useQuery<LearningPatternPage>({
+    queryKey: ['learning-patterns', agentId, status, page, limit],
+    queryFn: async () => (await api.get(`/agents/${agentId}/learning/patterns`, { params: { status, page, limit } })).data.data,
     enabled: !!agentId,
   });
 }
@@ -1354,5 +1384,155 @@ export function useTestLabelRules(agentId: number) {
     mutationFn: async (text: string) =>
       (await api.post(`/agents/${agentId}/crm/pipeline/rules/test`, { text })).data as
       { matched: { id: number; name: string; action_stage: string; action_wa_label: string }[]; count: number },
+      });
+      }
+
+      // ─────────────────────────────────────────────────────────────────────────
+      // Inbox realtime (pola v4) — SSE via fetch + reconnect 3 detik.
+      // ─────────────────────────────────────────────────────────────────────────
+
+      export interface InboxLiveEvent {
+        revision: number;
+        kind: 'incoming' | 'state' | 'revoke' | 'message' | 'history_sync' | 'typing' | 'conversation' | 'read_state' | 'new_message' | string;
+        sender?: string;
+        message_id?: string;
+        active?: boolean; // khusus typing: true = mulai mengetik, false = berhenti
+      }
+
+      export function useInboxRealtime(
+      agentId: number,
+      onEvent: (ev: InboxLiveEvent) => void,
+      ) {
+      useEffect(() => {
+        if (!agentId) return;
+        let stop = false;
+        let controller: AbortController | null = null;
+        let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+        const connect = () => {
+          if (stop) return;
+          controller = new AbortController();
+          const token = localStorage.getItem('token');
+          fetch(`/api/agents/${agentId}/inbox/events`, {
+            headers: token ? { Authorization: `Bearer ${token}` } : {},
+            signal: controller.signal,
+          })
+            .then(async (res) => {
+              if (!res.ok || !res.body) throw new Error(`http ${res.status}`);
+              const reader = res.body.getReader();
+              const decoder = new TextDecoder();
+              let buf = '';
+              for (;;) {
+                if (stop) return;
+                const { done, value } = await reader.read();
+                if (done) break;
+                buf += decoder.decode(value, { stream: true });
+                let idx: number;
+                while ((idx = buf.indexOf('\n\n')) >= 0) {
+                  const frame = buf.slice(0, idx);
+                  buf = buf.slice(idx + 2);
+                  let eventName = 'event';
+                  let data = '';
+                  for (const line of frame.split('\n')) {
+                    if (line.startsWith('event:')) eventName = line.slice(6).trim();
+                    else if (line.startsWith('data:')) data += line.slice(5).trim();
+                  }
+                  if (eventName === 'ping' || eventName === 'ready' || !data) continue;
+                  try {
+                    onEvent(JSON.parse(data) as InboxLiveEvent);
+                  } catch {
+                    // frame rusak — lewati
+                  }
+                }
+              }
+            })
+            .catch(() => {
+              // Koneksi putus → reconnect (kecuali stop).
+            })
+            .finally(() => {
+              if (!stop) {
+                retryTimer = setTimeout(connect, 3000);
+              }
+            });
+        };
+
+        connect();
+        return () => {
+          stop = true;
+          controller?.abort();
+          if (retryTimer) clearTimeout(retryTimer);
+        };
+      }, [agentId, onEvent]);
+      }
+
+      // useLinkPreview — ambil pratinjau tautan (SSRF-safe di server).
+      export function useLinkPreview(agentId: number) {
+      return useMutation({
+        mutationFn: async (url: string) =>
+          (await api.get(`/agents/${agentId}/link-preview`, { params: { url } })).data as {
+            data: { title: string; description?: string; image?: string; url: string };
+          },
+      });
+      }
+
+// ---- Team CS Management ----
+
+export function useTeamUsers() {
+  return useQuery<TeamUser[]>({
+    queryKey: ['team-users'],
+    queryFn: async () => (await api.get('/team/users')).data.data,
+    staleTime: 30_000,
+  });
+}
+
+export function useCreateTeamUser() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (data: CreateTeamUserRequest) =>
+      (await api.post('/team/users', data)).data.data as TeamUser,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['team-users'] }),
+  });
+}
+
+export function useUpdateTeamUser() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, data }: { id: number; data: UpdateTeamUserRequest }) =>
+      (await api.put(`/team/users/${id}`, data)).data.data as TeamUser,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['team-users'] }),
+  });
+}
+
+export function useDeleteTeamUser() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: number) => (await api.delete(`/team/users/${id}`)).data,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['team-users'] }),
+  });
+}
+
+export function useCSActivity() {
+  return useQuery<CSActivityLog[]>({
+    queryKey: ['cs-activity'],
+    queryFn: async () => (await api.get('/team/activity')).data.data,
+    refetchInterval: 30_000,
+    staleTime: 15_000,
+  });
+}
+
+// ---- Resync riwayat WhatsApp (deep-sync sederhana) ----
+export function useRequestHistoryResync(agentId: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async () =>
+      (await api.post(`/agents/${agentId}/history-sync/resync`)).data as {
+        ok: boolean;
+        message: string;
+        imported?: number;
+        skipped?: number;
+      },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['contacts', agentId] });
+    },
   });
 }

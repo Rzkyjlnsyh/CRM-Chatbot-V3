@@ -88,14 +88,14 @@ func StartLearning(c *gin.Context) {
 		return
 	}
 	c.JSON(202, gin.H{"data": gin.H{
-		"run_id":       result.ID,
-		"status":       "pending",
-		"message":      "Learning dimulai di background. Cek status secara berkala.",
-		"start_date":   startDate,
-		"end_date":     endDate,
-		"total_chats":  totalChats,
-		"human_chats":  humanChats,
-		"contacts":     contacts,
+		"run_id":      result.ID,
+		"status":      "pending",
+		"message":     "Learning dimulai di background. Cek status secara berkala.",
+		"start_date":  startDate,
+		"end_date":    endDate,
+		"total_chats": totalChats,
+		"human_chats": humanChats,
+		"contacts":    contacts,
 	}})
 }
 
@@ -131,18 +131,41 @@ func GetLearningRun(c *gin.Context) {
 }
 
 // GetLearningPatterns godoc
-// GET /api/agents/:id/learning/patterns
+// GET /api/agents/:id/learning/patterns?status=suggested&page=1&limit=50
+// Respon: { patterns, total, page, limit } — total = jumlah SELURUH pola
+// (bukan hanya halaman ini) supaya UI menampilkan angka yang utuh.
 func GetLearningPatterns(c *gin.Context) {
 	agentID := currentAgentID(c)
 	status := c.DefaultQuery("status", "suggested") // suggested, applied, rejected, all
 
-	var patterns []models.LearningPattern
-	q := database.DB.Where("agent_id = ?", agentID)
-	if status != "all" {
-		q = q.Where("status = ?", status)
+	page := 1
+	if p, err := strconv.Atoi(c.DefaultQuery("page", "1")); err == nil && p > 0 {
+		page = p
 	}
-	q.Order("closing_impact desc, usage_count desc, confidence desc").Limit(50).Find(&patterns)
-	c.JSON(200, gin.H{"data": patterns})
+	limit := 50
+	if l, err := strconv.Atoi(c.DefaultQuery("limit", "50")); err == nil && l > 0 {
+		limit = l
+	}
+	if limit > 200 {
+		limit = 200
+	}
+
+	base := database.DB.Model(&models.LearningPattern{}).Where("agent_id = ?", agentID)
+	if status != "all" {
+		base = base.Where("status = ?", status)
+	}
+	var total int64
+	base.Count(&total)
+
+	var patterns []models.LearningPattern
+	base.Order("closing_impact desc, usage_count desc, confidence desc").
+		Offset((page - 1) * limit).Limit(limit).Find(&patterns)
+	c.JSON(200, gin.H{"data": gin.H{
+		"patterns": patterns,
+		"total":    total,
+		"page":     page,
+		"limit":    limit,
+	}})
 }
 
 // ApplyLearningPattern godoc
@@ -335,9 +358,13 @@ func SaveLearningConfigAPI(c *gin.Context) {
 func GetLearningStatus(c *gin.Context) {
 	agentID := currentAgentID(c)
 
-	// Dapatkan run terakhir + statistik
+	// Run paling mutakhir = yang terakhir SELESAI (atau sedang berjalan).
+	// COALESCE: run running (completed_at null) tetap muncul dengan waktu
+	// mulai — kartu status menunjukkan aktivitas nyata, bukan id terakhir.
 	var lastRun models.LearningRun
-	database.DB.Where("agent_id = ?", agentID).Order("id desc").First(&lastRun)
+	database.DB.Where("agent_id = ?", agentID).
+		Order("COALESCE(completed_at, created_at) DESC").
+		First(&lastRun)
 
 	var suggestedCount, appliedCount, rejectedCount int64
 	database.DB.Model(&models.LearningPattern{}).Where("agent_id = ? AND status = ?", agentID, "suggested").Count(&suggestedCount)
@@ -370,6 +397,122 @@ func TrackHumanReply(agentID uint, chatID uint, source string) {
 }
 
 // --- Scheduler Learning Otomatis ---
+
+// CloneLearningProfileToAll menyalin profil AI (persona + knowledge + konfigurasi
+// learning) dari agent SUMBER ke SEMUA agent lain dalam tenant yang sama.
+// Ini mewujudkan klaim "1 agent kepribadian untuk semua nomor WA".
+// POST /agents/:id/learning/clone-profile-to-all
+func CloneLearningProfileToAll(c *gin.Context) {
+	agentID := currentAgentID(c)
+	var src models.Agent
+	if err := database.DB.First(&src, agentID).Error; err != nil {
+		c.JSON(404, gin.H{"error": "Agent tidak ditemukan"})
+		return
+	}
+	var targets []models.Agent
+	if err := database.DB.Where("tenant_id = ? AND id <> ?", src.TenantID, agentID).Find(&targets).Error; err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	if len(targets) == 0 {
+		c.JSON(200, gin.H{"copied": 0, "message": "Tidak ada agent lain di akun ini"})
+		return
+	}
+	var knowledges []models.Knowledge
+	database.DB.Where("agent_id = ?", agentID).Find(&knowledges)
+	var srcCfg models.LearningConfig
+	hasCfg := database.DB.Where("agent_id = ?", agentID).First(&srcCfg).Error == nil
+
+	count := 0
+	for _, t := range targets {
+		// 1) Persona
+		if err := database.DB.Model(&models.Agent{}).Where("id = ?", t.ID).
+			Update("system_prompt", src.SystemPrompt).Error; err != nil {
+			continue
+		}
+		// 2) Knowledge (salin Q/A/Tags + embedding — model embedding sama)
+		for _, k := range knowledges {
+			nk := models.Knowledge{
+				AgentID: t.ID, Question: k.Question, Answer: k.Answer,
+				Tags: k.Tags, Embedding: k.Embedding,
+			}
+			database.DB.Create(&nk)
+		}
+		// 3) Konfigurasi learning
+		if hasCfg {
+			var tcfg models.LearningConfig
+			if database.DB.Where("agent_id = ?", t.ID).First(&tcfg).Error != nil {
+				tcfg = models.LearningConfig{AgentID: t.ID}
+			}
+			tcfg.Enabled = srcCfg.Enabled
+			tcfg.AutoApply = srcCfg.AutoApply
+			tcfg.MinConfidence = srcCfg.MinConfidence
+			tcfg.MinUsageCount = srcCfg.MinUsageCount
+			tcfg.MaxPatternsPerRun = srcCfg.MaxPatternsPerRun
+			tcfg.PreserveManualKnowledge = srcCfg.PreserveManualKnowledge
+			tcfg.ScheduleEnabled = srcCfg.ScheduleEnabled
+			tcfg.ScheduleCron = srcCfg.ScheduleCron
+			tcfg.LookbackDays = srcCfg.LookbackDays
+			tcfg.ClosingLabels = srcCfg.ClosingLabels
+			if tcfg.ID == 0 {
+				database.DB.Create(&tcfg)
+			} else {
+				database.DB.Save(&tcfg)
+			}
+		}
+		count++
+	}
+	c.JSON(200, gin.H{"copied": count, "knowledge_copied": len(knowledges), "message": fmt.Sprintf("Profil disalin ke %d agent", count)})
+}
+
+// EnableLearningForAll mengaktifkan AI Learning untuk SEMUA agent tenant
+// sekaligus (klaim: "1 AI learning untuk semua nomor WA").
+// POST /agents/:id/learning/enable-all {auto_apply?, schedule_enabled?}
+func EnableLearningForAll(c *gin.Context) {
+	agentID := currentAgentID(c)
+	var src models.Agent
+	if err := database.DB.First(&src, agentID).Error; err != nil {
+		c.JSON(404, gin.H{"error": "Agent tidak ditemukan"})
+		return
+	}
+	var req struct {
+		AutoApply       bool `json:"auto_apply"`
+		ScheduleEnabled bool `json:"schedule_enabled"`
+	}
+	_ = c.ShouldBindJSON(&req)
+
+	var agents []models.Agent
+	if err := database.DB.Where("tenant_id = ?", src.TenantID).Find(&agents).Error; err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	count := 0
+	for _, a := range agents {
+		var cfg models.LearningConfig
+		if database.DB.Where("agent_id = ?", a.ID).First(&cfg).Error != nil {
+			cfg = models.LearningConfig{AgentID: a.ID}
+		}
+		cfg.Enabled = true
+		cfg.AutoApply = req.AutoApply
+		cfg.ScheduleEnabled = req.ScheduleEnabled
+		if cfg.LookbackDays <= 0 {
+			cfg.LookbackDays = 30
+		}
+		if cfg.MinConfidence == 0 {
+			cfg.MinConfidence = 0.7
+		}
+		if cfg.MinUsageCount == 0 {
+			cfg.MinUsageCount = 3
+		}
+		if cfg.ID == 0 {
+			database.DB.Create(&cfg)
+		} else {
+			database.DB.Save(&cfg)
+		}
+		count++
+	}
+	c.JSON(200, gin.H{"enabled": count, "message": fmt.Sprintf("AI Learning aktif untuk %d agent", count)})
+}
 
 // StartLearningScheduler menjalankan learning otomatis untuk semua agent yang
 // mengaktifkan schedule (LearningConfig.Enabled && ScheduleEnabled). Cek tiap

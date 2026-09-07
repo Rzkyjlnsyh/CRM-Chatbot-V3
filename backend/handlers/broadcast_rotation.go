@@ -42,7 +42,7 @@ const (
 	quarantineSoft       = "soft"
 	quarantineDisconnect = "disconnect"
 
-	softQuarantineTTL  = 10 * time.Minute
+	softQuarantineTTL       = 10 * time.Minute
 	disconnectCooldownLimit = 45 * time.Second
 	// Gagal sistemik beruntun sebelum soft-quarantine (bukan invalid recipient).
 	circuitBreakerThreshold = 4

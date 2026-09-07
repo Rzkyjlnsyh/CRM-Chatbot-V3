@@ -8,6 +8,7 @@ import (
 	"log"
 	"math/rand"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,6 +21,7 @@ import (
 	"go.mau.fi/whatsmeow/appstate"
 	waBinary "go.mau.fi/whatsmeow/binary"
 	waProto "go.mau.fi/whatsmeow/proto/waE2E"
+	waHistorySync "go.mau.fi/whatsmeow/proto/waHistorySync"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
@@ -43,7 +45,11 @@ type IncomingMessage struct {
 	ChatJID   types.JID // alamat chat asli; penting untuk read receipt pada akun LID
 	SenderJID types.JID // pengirim asli yang dipakai server WhatsApp
 	ReplyTo   string    // ID pesan yg di-reply (dari ContextInfo)
-	PushName  string    // nama profil pengirim (dari WA), untuk disimpan ke Contact
+	ReplyText string    // teks pesan yg di-reply (kalau tersedia)
+	// MediaMetadata menyimpan envelope pesan WA untuk lazy-download/retry.
+	MediaMetadata []byte
+	PushName      string    // nama profil pengirim (dari WA), untuk disimpan ke Contact
+	Timestamp     time.Time // timestamp asli WA (dipakai pesan manual perangkat)
 }
 
 // MessageHandler dipanggil tiap pesan masuk, membawa ID agent (CS) penerima.
@@ -81,14 +87,22 @@ type ReceiptMeta struct {
 type ReceiptHandler func(agentID uint, m ReceiptMeta)
 
 type waInstance struct {
-	mu             sync.Mutex
-	labelSyncMu    sync.Mutex
-	agentID        uint
-	client         *whatsmeow.Client
-	qrCode         string
-	qrExpiry       time.Time // kapan kode QR saat ini akan diputar whatsmeow (untuk countdown akurat)
-	status         string    // "disconnected", "qr", "connecting", "connected", "expired", "pairing", "pair_error"
-	contactsSynced bool      // true setelah backfill nama kontak dari buku alamat (sekali per proses)
+	mu           sync.Mutex
+	labelSyncMu  sync.Mutex
+	agentID      uint
+	client       *whatsmeow.Client
+	sentBySystem map[string]time.Time // wa_msg_id → waktu kirim (dedup echo pesan sendiri)
+	qrCode       string
+	qrExpiry     time.Time // kapan kode QR saat ini akan diputar whatsmeow (untuk countdown akurat)
+	// Waiter history sync: kode yang menunggu hasil sinkronisasi (tombol Resync).
+	historyWaitersMu sync.Mutex
+	historyWaiters   map[string][]chan struct{}
+	// Deep-sync (pola v4): serialisasi job + status yang jujur untuk UI.
+	historyRequestMu sync.Mutex
+	historySeq       uint64
+	historyStatus    HistorySyncStatus
+	status           string // "disconnected", "qr", "connecting", "connected", "expired", "pairing", "pair_error"
+	contactsSynced   bool   // true setelah backfill nama kontak dari buku alamat (sekali per proses)
 
 	// Jalur login via kode pairing (alternatif QR): user memasukkan kode 8 huruf di WA.
 	pairing   bool   // true bila sesi ini sedang dalam alur kode pairing (bukan QR)
@@ -157,6 +171,47 @@ func SetLabelHandlers(edit LabelEditHandler, assoc LabelAssocHandler) {
 	onLabelAssoc = assoc
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Inbox Chat State (v4 — ported dari chatloop-1.6-1.7)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// HistoryChatState membawa snapshot status satu percakapan dari HistorySync WA.
+// Berisi jumlah unread, marked-unread, dan timestamp pesan terakhir.
+type HistoryChatState struct {
+	Sender       string
+	UnreadCount  int
+	MarkedUnread bool
+	Timestamp    time.Time // LastMsgTimestamp dari WA
+}
+
+// HistoryChatStateHandler dipanggil saat engine WA menerima snapshot status chat.
+type HistoryChatStateHandler func(agentID uint, states []HistoryChatState)
+
+// WhatsAppReadStateHandler dipanggil saat HP mengirim sinyal baca/belum-baca.
+type WhatsAppReadStateHandler func(agentID uint, sender string, read bool, timestamp time.Time)
+
+var (
+	onHistoryChatState  HistoryChatStateHandler
+	onWhatsAppReadState WhatsAppReadStateHandler
+)
+
+func SetHistoryChatStateHandler(handler HistoryChatStateHandler)   { onHistoryChatState = handler }
+func SetWhatsAppReadStateHandler(handler WhatsAppReadStateHandler) { onWhatsAppReadState = handler }
+
+// NormalizeInboxSender mempertahankan alamat thread grup (JID @g.us),
+// sedangkan thread personal dinormalisasi ke nomor telepon tanpa kode negara berlebih.
+func NormalizeInboxSender(value string) string {
+	value = strings.TrimPrefix(strings.TrimSpace(value), "+")
+	if IsGroupJID(value) {
+		jid, err := types.ParseJID(value)
+		if err != nil || jid.Server != types.GroupServer || jid.User == "" {
+			return ""
+		}
+		return jid.String()
+	}
+	return NormalizePhone(value)
+}
+
 // WALabelSnapshot adalah satu label WhatsApp dari hasil sinkronisasi penuh.
 type WALabelSnapshot struct {
 	LabelID string
@@ -184,7 +239,7 @@ func WA(agentID uint) *waInstance {
 	if w, ok := instances[agentID]; ok {
 		return w
 	}
-	w := &waInstance{agentID: agentID, status: "disconnected"}
+	w := &waInstance{agentID: agentID, status: "disconnected", sentBySystem: make(map[string]time.Time)}
 	instances[agentID] = w
 	return w
 }
@@ -498,17 +553,60 @@ func (w *waInstance) handleEvent(evt interface{}) {
 		meta := ReceiptMeta{Recipient: v.Sender.User, Status: status, MessageIDs: ids, Timestamp: v.Timestamp.Unix()}
 		Go("onReceipt", func() { onReceipt(w.agentID, meta) })
 
+	case *events.HistorySync:
+		// Import riwayat WA dari perangkat utama (pola v4) — diport ke fork klien.
+		if onHistorySync != nil && v.Data != nil {
+			Go("historySync", func() {
+				if _, _, err := w.processHistorySync(v.Data, v.Data.GetSyncType() == waHistorySync.HistorySync_FULL); err != nil {
+					log.Printf("WA agent %d history sync: %v", w.agentID, err)
+				}
+			})
+		}
+		return
+	case *events.ChatPresence:
+		// Indikator "pelanggan sedang mengetik" — diteruskan ke Inbox via handler.
+		if onChatPresence != nil {
+			Go("chatPresence", func() { onChatPresence(w.agentID, v.Sender.User, string(v.State)) })
+		}
 	case *events.Message:
 		// Pesan manual dari HP/perangkat tertaut lain dicatat sebagai takeover manusia.
-		// Event kiriman service sendiri tidak memiliki DeviceSentMeta dan tetap dilewati.
+		if pm := v.Message.GetProtocolMessage(); pm != nil && pm.GetKey() != nil {
+			revoked := pm.GetType() == waProto.ProtocolMessage_REVOKE ||
+				pm.GetEditedMessage() != nil
+			if revoked {
+				id := pm.GetKey().GetID()
+				if id != "" && onMessageRevoke != nil {
+					Go("onMessageRevoke", func() { onMessageRevoke(w.agentID, id, time.Now()) })
+				}
+			}
+			return
+		}
+		// Echo kiriman service SENDIRI tidak punya DeviceSentMeta — disaring lewat cache
+		// sentBySystem + pattern broadcast/newsletter supaya tidak tercatat dobel.
 		if v.Info.IsFromMe {
-			if v.Info.DeviceSentMeta != nil && onOwnMessage != nil && !v.Info.IsGroup {
+			if v.Info.IsGroup {
+				return
+			}
+			msgID := string(v.Info.ID)
+			if w.isSystemSent(msgID) {
+				return // echo pesan yang dikirim sistem sendiri — bukan balasan manusia
+			}
+			if strings.Contains(v.Info.Chat.User, "@broadcast") || strings.Contains(v.Info.Chat.User, "@newsletter") {
+				return
+			}
+			if onOwnMessage != nil {
 				in, ok := w.extractIncoming(v)
 				if ok {
-					in.WAMsgID = string(v.Info.ID)
+					in.WAMsgID = msgID
+					in.Timestamp = v.Info.Timestamp
 					recipient := v.Info.Chat
-					if recipient.Server == types.HiddenUserServer && !v.Info.RecipientAlt.IsEmpty() {
-						recipient = v.Info.RecipientAlt
+					if recipient.Server == types.HiddenUserServer {
+						if !v.Info.RecipientAlt.IsEmpty() {
+							RecordSenderAlias(w.agentID, recipient.User, v.Info.RecipientAlt.User)
+							recipient = v.Info.RecipientAlt
+						} else if pn := w.PNForLID(recipient.User); pn != "" {
+							recipient = types.NewJID(pn, types.DefaultUserServer)
+						}
 					}
 					Go("onOwnMessage", func() { onOwnMessage(w.agentID, recipient, in) })
 				}
@@ -556,8 +654,14 @@ func (w *waInstance) handleEvent(evt interface{}) {
 		// Kontak modern bisa beralamat LID (privasi). Pakai nomor telepon asli (SenderAlt)
 		// agar yang tersimpan & ditampilkan adalah nomor WA betulan, bukan angka LID.
 		contact := v.Info.Sender
-		if contact.Server == types.HiddenUserServer && !v.Info.SenderAlt.IsEmpty() {
-			contact = v.Info.SenderAlt
+		if contact.Server == types.HiddenUserServer {
+			if !v.Info.SenderAlt.IsEmpty() {
+				// Belajar asosiasi LID→PN (untuk menyatukan riwayat lama).
+				RecordSenderAlias(w.agentID, contact.User, v.Info.SenderAlt.User)
+				contact = v.Info.SenderAlt
+			} else if pn := w.PNForLID(contact.User); pn != "" {
+				contact = types.NewJID(pn, types.DefaultUserServer)
+			}
 		}
 		Go("onMessage", func() { onMessage(w.agentID, contact, in) })
 	}
@@ -758,13 +862,56 @@ func NormalizePhone(s string) string {
 	switch {
 	case d == "":
 		return ""
-	case strings.HasPrefix(d, "0"):
+	case strings.HasPrefix(d, "0") && len(d) >= 5 && len(d) <= 13:
+		// Nomor lokal Indonesia (08xx / format pendek): 5–13 digit.
 		return "62" + d[1:]
-	case strings.HasPrefix(d, "8"): // nomor lokal tanpa awalan 0/62
-		return "62" + d
+	case strings.HasPrefix(d, "62") && len(d) >= 11 && len(d) <= 14:
+		return d
+	case strings.HasPrefix(d, "8") && len(d) >= 8 && len(d) <= 12:
+		// Nomor lokal Indonesia tanpa 0/62 (8xx): 8–12 digit.
+		// 13+ digit berawalan 8 = nomor asing (86 China, 880 Bangladesh, dll).
+		return "628" + d[1:]
 	default:
+		// Bukan pola nomor Indonesia (LID, grup, nomor asing) —
+		// kembalikan digit apa adanya, JANGAN dipaksa jadi 62xx.
 		return d
 	}
+}
+
+// RecordSenderAlias merekam asosiasi LID → nomor asli yang dipelajari dari
+// pesan live WhatsApp (SenderAlt dari HP utama). Idempoten.
+func RecordSenderAlias(agentID uint, lid, pn string) {
+	lid = strings.TrimSpace(lid)
+	pn = NormalizePhone(strings.TrimSpace(pn))
+	if agentID == 0 || lid == "" || pn == "" || !LooksLikeLID(lid) {
+		return
+	}
+	var existing models.SenderAlias
+	err := database.DB.Where("agent_id = ? AND lid = ?", agentID, lid).First(&existing).Error
+	if err == nil {
+		if existing.PN != pn {
+			database.DB.Model(&existing).Update("pn", pn)
+		}
+		return
+	}
+	database.DB.Create(&models.SenderAlias{AgentID: agentID, LID: lid, PN: pn})
+}
+
+// LooksLikeLID = kandidat identitas LID WhatsApp (bukan nomor telepon):
+// deretan digit dengan panjang 15–17.
+// - 18+ digit = ID grup (kadang tersimpan tanpa @g.us) → BUKAN LID
+// - 13–14 digit = bisa nomor luar negeri (86xx/880xx dll) → BUKAN LID
+func LooksLikeLID(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return len(s) >= 15 && len(s) <= 17
 }
 
 // ValidatePhoneForWA menilai apakah nomor (setelah dinormalisasi) laik untuk dikirimi
@@ -1278,79 +1425,135 @@ func (w *waInstance) PNForLID(lid string) string {
 	return pn.User
 }
 
-// extractIncoming mengubah pesan WA jadi IncomingMessage (teks atau media yang sudah di-download).
+// extractIncoming mengubah pesan WA jadi IncomingMessage (teks atau media).
+// Upgrade v4: (1) notifikasi protokol (stub) TIDAK jadi bubble chat;
+// (2) wrapper DeviceSent/Ephemeral/ViewOnce dibuka; (3) media yang gagal
+// di-download tetap disimpan dengan MediaMetadata (lazy-download nanti),
+// bukan dibuang.
 func (w *waInstance) extractIncoming(v *events.Message) (IncomingMessage, bool) {
-	m := v.Message
+	if v == nil {
+		return IncomingMessage{}, false
+	}
+	if isProtocolSystemNotification(v.SourceWebMsg) {
+		return IncomingMessage{}, false
+	}
+	m := unwrapHistoryProtoMessage(v.Message)
+	if m == nil {
+		return IncomingMessage{}, false
+	}
 	if t := m.GetConversation(); t != "" {
-		return IncomingMessage{Text: normalizeLocationLinkText(t)}, true
+		text := normalizeLocationLinkText(t)
+		text = cleanHistoryExportFormat(text)
+		return IncomingMessage{Text: text}, true
 	}
 	if ext := m.GetExtendedTextMessage(); ext != nil && ext.GetText() != "" {
-		var replyTo string
-		if ci := ext.GetContextInfo(); ci != nil {
-			replyTo = ci.GetStanzaID()
-		}
-		return IncomingMessage{Text: normalizeLocationLinkText(ext.GetText()), ReplyTo: replyTo}, true
+		ci := ext.GetContextInfo()
+		return IncomingMessage{
+			Text:      normalizeLocationLinkText(ext.GetText()),
+			ReplyTo:   contextReplyID(ci),
+			ReplyText: contextReplyPreview(ci),
+		}, true
 	}
 	if text, actionID, replyTo, ok := interactiveReplyText(m); ok {
 		return IncomingMessage{Text: text, ActionID: actionID, ReplyTo: replyTo}, true
 	}
 	ctx := context.Background()
+	mediaMetadata, metadataErr := proto.Marshal(m)
+	if metadataErr != nil {
+		log.Printf("WA agent %d: gagal menyimpan metadata media: %v", w.agentID, metadataErr)
+		mediaMetadata = nil
+	}
+	// download nil-safe: client nil (unit test/offline) = unduhan ditunda,
+	// pesan tetap diteruskan dengan metadata untuk lazy-download.
+	download := func(downloadable whatsmeow.DownloadableMessage) []byte {
+		if w.client == nil {
+			return nil
+		}
+		data, err := w.client.Download(ctx, downloadable)
+		if err != nil {
+			log.Printf("WA agent %d: unduhan media ditunda (pesan tetap disimpan): %v", w.agentID, err)
+			return nil
+		}
+		return data
+	}
 	switch {
 	case m.GetLocationMessage() != nil:
 		loc := m.GetLocationMessage()
+		ci := loc.GetContextInfo()
 		return IncomingMessage{
 			Text:      locationContext(loc.GetName(), loc.GetAddress(), loc.GetComment(), loc.GetURL(), loc.GetDegreesLatitude(), loc.GetDegreesLongitude(), false),
 			MediaType: "location",
-			ReplyTo:   contextReplyID(loc.GetContextInfo()),
+			ReplyTo:   contextReplyID(ci),
+			ReplyText: contextReplyPreview(ci),
 		}, true
 	case m.GetLiveLocationMessage() != nil:
 		loc := m.GetLiveLocationMessage()
+		ci := loc.GetContextInfo()
 		return IncomingMessage{
 			Text:      locationContext("", "", loc.GetCaption(), "", loc.GetDegreesLatitude(), loc.GetDegreesLongitude(), true),
 			MediaType: "location",
-			ReplyTo:   contextReplyID(loc.GetContextInfo()),
+			ReplyTo:   contextReplyID(ci),
+			ReplyText: contextReplyPreview(ci),
 		}, true
 	case m.GetImageMessage() != nil:
 		img := m.GetImageMessage()
-		data, err := w.client.Download(ctx, img)
-		if err != nil {
-			log.Printf("WA agent %d: gagal download gambar: %v", w.agentID, err)
-			return IncomingMessage{}, false
-		}
-		return IncomingMessage{Text: img.GetCaption(), MediaType: "image", Mimetype: img.GetMimetype(), Data: data}, true
+		ci := img.GetContextInfo()
+		return IncomingMessage{
+			Text: img.GetCaption(), MediaType: "image", Mimetype: img.GetMimetype(),
+			MediaMetadata: mediaMetadata,
+			Data:          download(img),
+			ReplyTo:       contextReplyID(ci), ReplyText: contextReplyPreview(ci),
+		}, true
 	case m.GetDocumentMessage() != nil:
 		doc := m.GetDocumentMessage()
-		data, err := w.client.Download(ctx, doc)
-		if err != nil {
-			log.Printf("WA agent %d: gagal download dokumen: %v", w.agentID, err)
-			return IncomingMessage{}, false
-		}
-		return IncomingMessage{Text: doc.GetCaption(), MediaType: "document", Mimetype: doc.GetMimetype(), FileName: doc.GetFileName(), Data: data}, true
+		ci := doc.GetContextInfo()
+		return IncomingMessage{
+			Text: doc.GetCaption(), MediaType: "document", Mimetype: doc.GetMimetype(),
+			FileName:      doc.GetFileName(),
+			MediaMetadata: mediaMetadata,
+			Data:          download(doc),
+			ReplyTo:       contextReplyID(ci), ReplyText: contextReplyPreview(ci),
+		}, true
 	case m.GetVideoMessage() != nil:
 		vid := m.GetVideoMessage()
-		data, err := w.client.Download(ctx, vid)
-		if err != nil {
-			log.Printf("WA agent %d: gagal download video: %v", w.agentID, err)
-			return IncomingMessage{}, false
-		}
-		return IncomingMessage{Text: vid.GetCaption(), MediaType: "video", Mimetype: vid.GetMimetype(), Data: data}, true
+		ci := vid.GetContextInfo()
+		return IncomingMessage{
+			Text: vid.GetCaption(), MediaType: "video", Mimetype: vid.GetMimetype(),
+			MediaMetadata: mediaMetadata,
+			Data:          download(vid),
+			ReplyTo:       contextReplyID(ci), ReplyText: contextReplyPreview(ci),
+		}, true
 	case m.GetAudioMessage() != nil:
 		aud := m.GetAudioMessage()
-		data, err := w.client.Download(ctx, aud)
-		if err != nil {
-			log.Printf("WA agent %d: gagal download audio: %v", w.agentID, err)
-			return IncomingMessage{}, false
-		}
-		return IncomingMessage{MediaType: "audio", Mimetype: aud.GetMimetype(), Data: data}, true
+		ci := aud.GetContextInfo()
+		return IncomingMessage{
+			MediaType: "audio", Mimetype: aud.GetMimetype(),
+			MediaMetadata: mediaMetadata,
+			Data:          download(aud),
+			ReplyTo:       contextReplyID(ci), ReplyText: contextReplyPreview(ci),
+		}, true
 	case m.GetStickerMessage() != nil:
 		st := m.GetStickerMessage()
-		data, err := w.client.Download(ctx, st)
-		if err != nil {
-			return IncomingMessage{}, false
-		}
-		return IncomingMessage{MediaType: "sticker", Mimetype: st.GetMimetype(), Data: data}, true
+		ci := st.GetContextInfo()
+		return IncomingMessage{
+			MediaType: "sticker", Mimetype: st.GetMimetype(),
+			MediaMetadata: mediaMetadata,
+			Data:          download(st),
+			ReplyTo:       contextReplyID(ci), ReplyText: contextReplyPreview(ci),
+		}, true
 	}
 	return IncomingMessage{}, false // tipe pesan lain diabaikan
+}
+
+// historyExportPattern cocokkan baris ekspor WhatsApp: [HH.MM, DD/MM/YYYY] Nama/No: pesan
+var historyExportPattern = regexp.MustCompile(`^\[[\d.,/:]+\]\s*[^:]+:\s*`)
+
+// cleanHistoryExportFormat menghapus prefix ekspor WhatsApp bila terdeteksi.
+func cleanHistoryExportFormat(text string) string {
+	if historyExportPattern.MatchString(text) {
+		return historyExportPattern.ReplaceAllString(text, "")
+	}
+	return text
 }
 
 func normalizeLocationLinkText(text string) string {
@@ -1517,7 +1720,7 @@ func (w *waInstance) SendImage(toNumber, caption, mimetype string, data []byte) 
 	if err != nil {
 		return fmt.Errorf("gagal upload gambar: %w", err)
 	}
-	_, err = client.SendMessage(ctx, types.NewJID(toNumber, types.DefaultUserServer), &waProto.Message{
+	resp, err := client.SendMessage(ctx, types.NewJID(toNumber, types.DefaultUserServer), &waProto.Message{
 		ImageMessage: &waProto.ImageMessage{
 			Caption:       proto.String(caption),
 			Mimetype:      proto.String(mimetype),
@@ -1529,7 +1732,7 @@ func (w *waInstance) SendImage(toNumber, caption, mimetype string, data []byte) 
 			FileLength:    proto.Uint64(up.FileLength),
 		},
 	})
-	return err
+	return markSent(w, resp, err)
 }
 
 // SendDocument mengunggah & mengirim file/dokumen ke nomor (caption opsional).
@@ -1545,7 +1748,7 @@ func (w *waInstance) SendDocument(toNumber, fileName, mimetype, caption string, 
 	if err != nil {
 		return fmt.Errorf("gagal upload dokumen: %w", err)
 	}
-	_, err = client.SendMessage(ctx, types.NewJID(toNumber, types.DefaultUserServer), &waProto.Message{
+	resp, err := client.SendMessage(ctx, types.NewJID(toNumber, types.DefaultUserServer), &waProto.Message{
 		DocumentMessage: &waProto.DocumentMessage{
 			FileName:      proto.String(fileName),
 			Title:         proto.String(fileName),
@@ -1559,7 +1762,7 @@ func (w *waInstance) SendDocument(toNumber, fileName, mimetype, caption string, 
 			FileLength:    proto.Uint64(up.FileLength),
 		},
 	})
-	return err
+	return markSent(w, resp, err)
 }
 
 // SendVideo mengunggah & mengirim video ke nomor (caption opsional).
@@ -1576,7 +1779,7 @@ func (w *waInstance) SendVideo(toNumber, caption, mimetype string, data []byte) 
 	if err != nil {
 		return fmt.Errorf("gagal upload video: %w", err)
 	}
-	_, err = client.SendMessage(ctx, types.NewJID(toNumber, types.DefaultUserServer), &waProto.Message{
+	resp, err := client.SendMessage(ctx, types.NewJID(toNumber, types.DefaultUserServer), &waProto.Message{
 		VideoMessage: &waProto.VideoMessage{
 			Caption:       proto.String(caption),
 			Mimetype:      proto.String(mimetype),
@@ -1588,7 +1791,7 @@ func (w *waInstance) SendVideo(toNumber, caption, mimetype string, data []byte) 
 			FileLength:    proto.Uint64(up.FileLength),
 		},
 	})
-	return err
+	return markSent(w, resp, err)
 }
 
 // PreparedMedia menyimpan hasil upload media SEKALI agar bisa dikirim ke banyak penerima
@@ -1667,8 +1870,8 @@ func (w *waInstance) sendPreparedMediaTo(to types.JID, caption string, pm *Prepa
 			FileEncSHA256: up.FileEncSHA256, FileSHA256: up.FileSHA256, FileLength: proto.Uint64(up.FileLength),
 		}}
 	}
-	_, err := client.SendMessage(context.Background(), to, msg)
-	return err
+	resp, err := client.SendMessage(context.Background(), to, msg)
+	return markSent(w, resp, err)
 }
 
 // Suspend memutus socket WA tanpa menghapus sesi (device tetap tersimpan di store).
@@ -1684,6 +1887,67 @@ func (w *waInstance) Suspend() {
 	w.status = "disconnected"
 }
 
+// ProfilePictureURL mengambil URL thumbnail foto profil WhatsApp (jika
+// privasi pengguna mengizinkan). Dipakai avatar kontak di Inbox.
+func (w *waInstance) ProfilePictureURL(ctx context.Context, sender string) (string, error) {
+	w.mu.Lock()
+	client := w.client
+	connected := client != nil && client.IsConnected() && client.IsLoggedIn()
+	w.mu.Unlock()
+	if !connected {
+		return "", errors.New("WhatsApp belum terhubung")
+	}
+	jid := types.NewJID(sender, types.DefaultUserServer)
+	info, err := client.GetProfilePictureInfo(ctx, jid, &whatsmeow.GetProfilePictureParams{Preview: true})
+	if err != nil {
+		return "", err
+	}
+	if info == nil || strings.TrimSpace(info.URL) == "" {
+		return "", errors.New("foto profil tidak tersedia")
+	}
+	return info.URL, nil
+}
+
+// sentBySystemCacheTTL = berapa lama wa_msg_id kiriman sistem diingat.
+const sentBySystemCacheTTL = 30 * time.Minute
+
+// markSystemSent mencatat bahwa pesan ini dikirim oleh sistem (bukan manusia dari HP),
+// supaya echo-nya di event Message tidak dicatat sebagai balasan manual.
+func (w *waInstance) markSystemSent(msgID types.MessageID) {
+	if len(msgID) == 0 {
+		return
+	}
+	w.mu.Lock()
+	w.sentBySystem[string(msgID)] = time.Now()
+	// Bersihkan entri kadaluarsa (ringan — map kecil).
+	if len(w.sentBySystem) > 500 {
+		cut := time.Now().Add(-sentBySystemCacheTTL)
+		for k, t := range w.sentBySystem {
+			if t.Before(cut) {
+				delete(w.sentBySystem, k)
+			}
+		}
+	}
+	w.mu.Unlock()
+}
+
+// isSystemSent mengecek apakah echo pesan ini berasal dari kiriman sistem.
+func (w *waInstance) isSystemSent(msgID string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	t, ok := w.sentBySystem[msgID]
+	return ok && time.Since(t) < sentBySystemCacheTTL
+}
+
+// markSent mencatat kiriman sistem (dedup echo) lalu meneruskan err.
+func markSent(w *waInstance, resp whatsmeow.SendResponse, err error) error {
+	if err == nil {
+		w.markSystemSent(resp.ID)
+	}
+	return err
+}
+
+// SendMessage = kirim pesan teks (dipakai balasan dari Inbox/API).
 func (w *waInstance) SendMessage(to types.JID, message string, replyToID ...string) error {
 	return w.sendMessageWithDelay(to, message, humanDelay(message), replyToID...)
 }
@@ -1800,8 +2064,8 @@ func (w *waInstance) sendMessageWithDelay(to types.JID, message string, delay ti
 			},
 		}
 	}
-	_, err := client.SendMessage(ctx, to, msg)
-	return err
+	resp, err := client.SendMessage(ctx, to, msg)
+	return markSent(w, resp, err)
 }
 
 // SendTextAndGetID mengirim teks dan mengembalikan ID pesan WhatsApp (untuk revoke).
@@ -1822,6 +2086,7 @@ func (w *waInstance) SendTextAndGetID(toNumber, message string) (string, error) 
 	if err != nil {
 		return "", err
 	}
+	w.markSystemSent(resp.ID)
 	return resp.ID, nil
 }
 
@@ -1865,8 +2130,8 @@ func (w *waInstance) PostStatus(text, mimetype string, media []byte) error {
 		}
 		msg = &waProto.Message{ExtendedTextMessage: &waProto.ExtendedTextMessage{Text: proto.String(text)}}
 	}
-	_, err := client.SendMessage(ctx, types.StatusBroadcastJID, msg)
-	return err
+	resp, err := client.SendMessage(ctx, types.StatusBroadcastJID, msg)
+	return markSent(w, resp, err)
 }
 
 // SendContact mengirim kartu kontak (vCard) — dipakai broadcast "simpan kontak kami".
@@ -1890,8 +2155,8 @@ func (w *waInstance) SendContact(toNumber, text, displayName, number string) err
 			Vcard:       proto.String(buildVCard(displayName, number)),
 		}
 	}
-	_, err := client.SendMessage(ctx, jid, msg)
-	return err
+	resp, err := client.SendMessage(ctx, jid, msg)
+	return markSent(w, resp, err)
 }
 
 // buildVCard menyusun vCard 3.0 minimal yang dikenali WhatsApp.

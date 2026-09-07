@@ -1,13 +1,13 @@
 import { Box, Container, Typography, Stack, Divider, Button } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
-import heroLogo from '../assets/Logo-slaludiskon-gradients.png';
+import heroLogo from '../assets/Logo-crm-dashboard-gradients.png';
 
 const SECTIONS: { h: string; p: string[] }[] = [
   {
     h: '1. Pengantar',
     p: [
-      'Kebijakan Privasi ini menjelaskan bagaimana SlaluDiskon mengumpulkan, menggunakan, dan melindungi data kamu saat memakai layanan asisten WhatsApp bertenaga AI kami. Dengan mendaftar dan menggunakan SlaluDiskon, kamu menyetujui praktik yang dijelaskan di halaman ini.',
+      'Kebijakan Privasi ini menjelaskan bagaimana CRM Dashboard mengumpulkan, menggunakan, dan melindungi data kamu saat memakai layanan asisten WhatsApp bertenaga AI kami. Dengan mendaftar dan menggunakan CRM Dashboard, kamu menyetujui praktik yang dijelaskan di halaman ini.',
     ],
   },
   {
@@ -75,7 +75,7 @@ const SECTIONS: { h: string; p: string[] }[] = [
   {
     h: '10. Kontak',
     p: [
-      'Jika ada pertanyaan tentang Kebijakan Privasi ini, hubungi kami di halo@slaludiskon.com.',
+      'Jika ada pertanyaan tentang Kebijakan Privasi ini, hubungi kami di halo@crm-dashboard.com.',
     ],
   },
 ];
@@ -86,7 +86,7 @@ export default function Privacy() {
     <Box sx={{ bgcolor: 'background.default', minHeight: '100vh' }}>
       <Box sx={{ borderBottom: '1px solid', borderColor: 'divider', bgcolor: '#fff' }}>
         <Container maxWidth="md" sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', py: 1.5 }}>
-          <Box component="img" src={heroLogo} alt="SlaluDiskon" sx={{ height: 34, cursor: 'pointer' }} onClick={() => navigate('/')} />
+          <Box component="img" src={heroLogo} alt="CRM Dashboard" sx={{ height: 34, cursor: 'pointer' }} onClick={() => navigate('/')} />
           <Button startIcon={<ArrowBackIcon />} onClick={() => navigate('/')}>Beranda</Button>
         </Container>
       </Box>
@@ -106,7 +106,7 @@ export default function Privacy() {
           ))}
         </Stack>
         <Divider sx={{ my: 4 }} />
-        <Typography variant="caption" color="text.secondary">© {new Date().getFullYear()} SlaluDiskon. Seluruh hak cipta dilindungi.</Typography>
+        <Typography variant="caption" color="text.secondary">© {new Date().getFullYear()} CRM Dashboard. Seluruh hak cipta dilindungi.</Typography>
       </Container>
     </Box>
   );

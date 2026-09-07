@@ -18,13 +18,13 @@ import (
 
 // LearningScoreData = komponen skor agent (dikembalikan ke dashboard).
 type LearningScoreData struct {
-	CloseRatePct       float64 `json:"close_rate_pct"`        // % kontak aktif 30h yang closing
-	ClosingContacts    int64   `json:"closing_contacts"`      // kontak unik closing 30h
-	ActiveContacts     int64   `json:"active_contacts"`       // kontak unik aktif 30h
-	PatternsApplied    int64   `json:"patterns_applied"`      // pola terpelajar diterapkan
-	PatternsPending    int64   `json:"patterns_pending"`      // pola menunggu review
-	AvgClosingImpact   float64 `json:"avg_closing_impact"`    // rata-rata dampak pola applied
-	Score              float64 `json:"score"`                 // skor gabungan 0-100
+	CloseRatePct     float64 `json:"close_rate_pct"`     // % kontak aktif 30h yang closing
+	ClosingContacts  int64   `json:"closing_contacts"`   // kontak unik closing 30h
+	ActiveContacts   int64   `json:"active_contacts"`    // kontak unik aktif 30h
+	PatternsApplied  int64   `json:"patterns_applied"`   // pola terpelajar diterapkan
+	PatternsPending  int64   `json:"patterns_pending"`   // pola menunggu review
+	AvgClosingImpact float64 `json:"avg_closing_impact"` // rata-rata dampak pola applied
+	Score            float64 `json:"score"`              // skor gabungan 0-100
 }
 
 // GetLearningScore menghitung skor agent. Skor = rata-rata berbobot:

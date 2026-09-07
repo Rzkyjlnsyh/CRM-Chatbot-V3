@@ -140,6 +140,88 @@ func RequireSuperAdmin() gin.HandlerFunc {
 	}
 }
 
+// currentUserID mengambil ID user yang sedang login dari gin context.
+// Diasumsikan AuthMiddleware sudah dipanggil sebelumnya.
+func currentUserID(c *gin.Context) uint {
+	if v, ok := c.Get("user_id"); ok {
+		if id, ok := v.(uint); ok {
+			return id
+		}
+	}
+	return 0
+}
+
+// isTenantAdmin mengembalikan true jika user adalah admin tenant (bukan CS-only).
+// CS-only user (IsCSOnly=true) tidak bisa akses endpoint admin.
+func isTenantAdmin(c *gin.Context) bool {
+	uid := currentUserID(c)
+	if uid == 0 {
+		return false
+	}
+	var user models.User
+	if database.DB.Select("is_super_admin, is_cs_only").First(&user, uid).Error != nil {
+		return false
+	}
+	return user.IsSuperAdmin || !user.IsCSOnly
+}
+
+// RequireTenantAdmin memblokir request dari user CS-only — hanya admin tenant yang bisa lewat.
+// WAJIB dipasang SETELAH AuthMiddleware.
+func RequireTenantAdmin() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !isTenantAdmin(c) {
+			c.AbortWithStatusJSON(403, gin.H{"error": "Akses khusus admin"})
+			return
+		}
+		c.Next()
+	}
+}
+
+// CSRouteGuard membatasi akses CS-only user hanya ke agent yang di-assign kepadanya.
+// Jika user adalah admin, semua agent bisa diakses (tidak ada batasan).
+// CSRouteGuard membatasi akun CS-only: hanya boleh menyentuh route Inbox yang
+// sudah masuk daftar izin (allowlist v4). Admin/super admin bebas penuh.
+// WAJIB dipasang SETELAH AuthMiddleware.
+func CSRouteGuard() gin.HandlerFunc {
+	allowed := map[string]map[string]bool{
+		"GET": {
+			"/api/agents": true, "/api/agents-status": true, "/api/agent-unread-summary": true,
+			"/api/agents/:id/wa/status": true, "/api/agents/:id/handoffs": true,
+			"/api/agents/:id/contacts": true, "/api/agents/:id/conversation": true,
+			"/api/agents/:id/inbox/events": true, "/api/agents/:id/inbox/incoming-cursor": true,
+			"/api/agents/:id/history-sync": true, "/api/agents/:id/conversation/brief": true,
+			"/api/agents/:id/link-preview": true, "/api/agents/:id/profile-picture": true,
+			"/api/agents/:id/inbox/unread-summary": true,
+		},
+		"POST": {
+			"/api/agents/:id/inbox/:sender/read": true, "/api/agents/:id/history-sync": true,
+			"/api/agents/:id/inbox/client-debug": true, "/api/agents/:id/conversation/brief": true,
+			"/api/agents/:id/send": true, "/api/agents/:id/send-media": true,
+			"/api/agents/:id/typing": true,
+		},
+		"DELETE": {
+			"/api/agents/:id/handoffs/:sender": true,
+		},
+	}
+	return func(c *gin.Context) {
+		if isTenantAdmin(c) {
+			c.Next()
+			return
+		}
+		if methods := allowed[c.Request.Method]; methods != nil && methods[c.FullPath()] {
+			c.Next()
+			return
+		}
+		c.AbortWithStatusJSON(403, gin.H{"error": "Akun CS tidak memiliki izin untuk fitur ini"})
+	}
+}
+
+// parseUintParam = helper parsing ID numerik dari path (0 bila tidak valid).
+func parseUintParam(s string) uint64 {
+	v, _ := strconv.ParseUint(s, 10, 64)
+	return v
+}
+
 // currentTenantID = tenant pemilik request (0 untuk super admin tanpa tenant).
 func currentTenantID(c *gin.Context) uint {
 	if v, ok := c.Get("tenant_id"); ok {

@@ -1,19 +1,19 @@
 import { Box, Container, Typography, Stack, Divider, Button } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
-import heroLogo from '../assets/Logo-slaludiskon-gradients.png';
+import heroLogo from '../assets/Logo-crm-dashboard-gradients.png';
 
 const SECTIONS: { h: string; p: string[] }[] = [
   {
     h: '1. Penerimaan ketentuan',
     p: [
-      'Dengan mendaftar dan menggunakan SlaluDiskon, kamu menyetujui Syarat dan Ketentuan ini. Jika kamu tidak setuju, mohon untuk tidak menggunakan layanan.',
+      'Dengan mendaftar dan menggunakan CRM Dashboard, kamu menyetujui Syarat dan Ketentuan ini. Jika kamu tidak setuju, mohon untuk tidak menggunakan layanan.',
     ],
   },
   {
     h: '2. Tentang layanan',
     p: [
-      'SlaluDiskon adalah layanan asisten WhatsApp bertenaga AI yang membantu bisnis membalas pelanggan secara otomatis, mengelola kontak, broadcast, pesan terjadwal, follow up, dan fitur terkait lainnya.',
+      'CRM Dashboard adalah layanan asisten WhatsApp bertenaga AI yang membantu bisnis membalas pelanggan secara otomatis, mengelola kontak, broadcast, pesan terjadwal, follow up, dan fitur terkait lainnya.',
     ],
   },
   {
@@ -39,21 +39,21 @@ const SECTIONS: { h: string; p: string[] }[] = [
   {
     h: '6. Penggunaan yang dapat diterima',
     p: [
-      'Kamu dilarang menggunakan SlaluDiskon untuk mengirim spam, penipuan, konten ilegal, atau melanggar hukum yang berlaku.',
+      'Kamu dilarang menggunakan CRM Dashboard untuk mengirim spam, penipuan, konten ilegal, atau melanggar hukum yang berlaku.',
       'Kamu wajib memperoleh persetujuan penerima sebelum mengirim pesan broadcast dan mematuhi kebijakan WhatsApp serta peraturan perlindungan data yang berlaku.',
     ],
   },
   {
     h: '7. Risiko terkait WhatsApp',
     p: [
-      'SlaluDiskon terhubung ke WhatsApp melalui fitur perangkat tertaut. Penggunaan otomatisasi, balasan massal, dan broadcast membawa risiko nomor WhatsApp dibatasi atau diblokir oleh pihak WhatsApp.',
-      'Risiko ini berada di luar kendali kami. Kamu menggunakan fitur otomatisasi dan broadcast atas tanggung jawab sendiri, dan SlaluDiskon tidak bertanggung jawab atas pemblokiran nomor yang terjadi.',
+      'CRM Dashboard terhubung ke WhatsApp melalui fitur perangkat tertaut. Penggunaan otomatisasi, balasan massal, dan broadcast membawa risiko nomor WhatsApp dibatasi atau diblokir oleh pihak WhatsApp.',
+      'Risiko ini berada di luar kendali kami. Kamu menggunakan fitur otomatisasi dan broadcast atas tanggung jawab sendiri, dan CRM Dashboard tidak bertanggung jawab atas pemblokiran nomor yang terjadi.',
     ],
   },
   {
     h: '8. Batasan tanggung jawab',
     p: [
-      'Layanan disediakan apa adanya. Sejauh diizinkan hukum, SlaluDiskon tidak bertanggung jawab atas kerugian tidak langsung, kehilangan keuntungan, atau kehilangan data yang timbul dari penggunaan layanan.',
+      'Layanan disediakan apa adanya. Sejauh diizinkan hukum, CRM Dashboard tidak bertanggung jawab atas kerugian tidak langsung, kehilangan keuntungan, atau kehilangan data yang timbul dari penggunaan layanan.',
     ],
   },
   {
@@ -77,7 +77,7 @@ const SECTIONS: { h: string; p: string[] }[] = [
   {
     h: '12. Kontak',
     p: [
-      'Untuk pertanyaan tentang ketentuan ini, hubungi kami di halo@slaludiskon.com.',
+      'Untuk pertanyaan tentang ketentuan ini, hubungi kami di halo@crm-dashboard.com.',
     ],
   },
 ];
@@ -88,7 +88,7 @@ export default function Terms() {
     <Box sx={{ bgcolor: 'background.default', minHeight: '100vh' }}>
       <Box sx={{ borderBottom: '1px solid', borderColor: 'divider', bgcolor: '#fff' }}>
         <Container maxWidth="md" sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', py: 1.5 }}>
-          <Box component="img" src={heroLogo} alt="SlaluDiskon" sx={{ height: 34, cursor: 'pointer' }} onClick={() => navigate('/')} />
+          <Box component="img" src={heroLogo} alt="CRM Dashboard" sx={{ height: 34, cursor: 'pointer' }} onClick={() => navigate('/')} />
           <Button startIcon={<ArrowBackIcon />} onClick={() => navigate('/')}>Beranda</Button>
         </Container>
       </Box>
@@ -108,7 +108,7 @@ export default function Terms() {
           ))}
         </Stack>
         <Divider sx={{ my: 4 }} />
-        <Typography variant="caption" color="text.secondary">© {new Date().getFullYear()} SlaluDiskon. Seluruh hak cipta dilindungi.</Typography>
+        <Typography variant="caption" color="text.secondary">© {new Date().getFullYear()} CRM Dashboard. Seluruh hak cipta dilindungi.</Typography>
       </Container>
     </Box>
   );

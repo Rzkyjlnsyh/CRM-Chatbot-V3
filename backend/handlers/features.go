@@ -3,6 +3,7 @@ package handlers
 import (
 	"io"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -124,13 +125,13 @@ func TestChat(c *gin.Context) {
 	reply = services.LinkifyWhatsApp(reply, agent.Number) // nomor WA jadi tautan klik (kecuali nomor sendiri)
 	c.JSON(200, gin.H{
 		"reply": reply, "escalate": escalate, "model": model,
-		"knowledge_count":  knowledgeCount,
-		"retrieval_mode":   trace.RetrievalMode,
-		"retrieval_query":  trace.RetrievalQuery,
-		"top_similarity":   trace.TopSimilarity,
-		"answer_overlap":   trace.AnswerOverlap,
-		"product_ids":      trace.ProductIDs,
-		"knowledge_ids":    trace.KnowledgeIDs,
+		"knowledge_count":    knowledgeCount,
+		"retrieval_mode":     trace.RetrievalMode,
+		"retrieval_query":    trace.RetrievalQuery,
+		"top_similarity":     trace.TopSimilarity,
+		"answer_overlap":     trace.AnswerOverlap,
+		"product_ids":        trace.ProductIDs,
+		"knowledge_ids":      trace.KnowledgeIDs,
 		"grounding_retried":  trace.GroundingRetried,
 		"grounding_fallback": trace.GroundingFallback,
 	})
@@ -194,41 +195,125 @@ func InboxContacts(c *gin.Context) {
 	if !ok {
 		return
 	}
-	type contactRow struct {
-		Sender  string    `json:"sender"`
-		LastAt  time.Time `json:"last_at"`
-		LastMsg string    `json:"last_msg"`
-	}
-	var rows []contactRow
-	// MAX(id) = pesan terbaru per sender (id mono naik). Hindari join created_at yang bisa
-	// dobel baris saat timestamp sama.
+
 	labelFilter := strings.TrimSpace(c.Query("label_id"))
-	sql := `
-		SELECT ch.sender, ch.created_at AS last_at,
+	searchQ := strings.TrimSpace(c.Query("q"))
+
+	// v4: InboxReadState menyediakan last_msg_at yang sinkron dengan WA
+	// (dari HistorySync + event live), menggantikan MAX(chat_history.id) yang
+	// hanya menurut urutan insert lokal.
+	type inboxRow struct {
+		Sender  string     `gorm:"column:sender"`
+		RSLast  *time.Time `gorm:"column:rs_last"`
+		CHLast  *time.Time `gorm:"column:ch_last"`
+		Unread  int        `gorm:"column:unread"`
+		LastMsg string     `gorm:"column:last_msg"`
+	}
+
+	// Sidebar (pola v4): sinkron dengan WA (dari HistorySync + event live) — preview
+	// diambil dari pesan yang benar-benar terbaru (per WAKTU WA, bukan per id insert).
+	// PENTING: import riwayat lama dari HP menulis ke tabel dengan id BARU sehingga
+	// MAX(id) bisa "menyalip" pesan asli hari ini → preview/urutan jadi salah.
+	baseSQL := `
+		SELECT
+			rs.sender,
+			rs.last_msg_at AS rs_last,
+			ch.created_at AS ch_last,
+			rs.whats_app_unread_count AS unread,
 			CASE
 				WHEN TRIM(COALESCE(ch.message, '')) != '' THEN ch.message
 				WHEN TRIM(COALESCE(ch.reply, '')) != '' THEN ch.reply
 				WHEN ch.media_type != '' THEN CONCAT('[', ch.media_type, ']')
 				ELSE ''
 			END AS last_msg
-		FROM chat_histories ch
-		INNER JOIN (
-			SELECT MAX(id) AS max_id
-			FROM chat_histories
-			WHERE agent_id = ?
-			GROUP BY sender
-		) latest ON ch.id = latest.max_id
-		WHERE ch.agent_id = ?`
-	args := []any{id, id}
+		FROM inbox_read_states rs
+		LEFT JOIN chat_histories ch ON ch.id = (
+			SELECT c2.id FROM chat_histories c2
+			WHERE c2.agent_id = rs.agent_id AND c2.sender = rs.sender
+			ORDER BY c2.created_at DESC, c2.id DESC LIMIT 1
+		)
+		WHERE rs.agent_id = ?`
+	args := []any{id}
+
 	if labelFilter != "" {
-		// Filter label: hanya sender yang menyandang label WhatsApp tsb.
-		sql += ` AND ch.sender IN (SELECT sender FROM chat_labels WHERE agent_id = ? AND label_id = ?)`
+		baseSQL += ` AND rs.sender IN (SELECT sender FROM chat_labels WHERE agent_id = ? AND label_id = ?)`
 		args = append(args, id, labelFilter)
 	}
-	sql += `
-		ORDER BY ch.id DESC
+	if searchQ != "" {
+		baseSQL += ` AND (rs.sender LIKE ? OR EXISTS (
+			SELECT 1 FROM contacts WHERE agent_id = ? AND number = rs.sender AND name LIKE ?
+		))`
+		like := "%" + searchQ + "%"
+		args = append(args, like, id, like)
+	}
+	// ORDER SEBELUM LIMIT: waktu efektif = yang terbaru antara state WA dan
+	// baris chat terakhir. Tanpa ini, baris yang state WA-nya basi (chat
+	// terbaru di identitas lain) terpotong LIMIT 500 → "hilang dari Semua".
+	baseSQL += `
+		ORDER BY CASE
+			WHEN rs.last_msg_at IS NULL THEN ch.created_at
+			WHEN ch.created_at IS NOT NULL AND ch.created_at > rs.last_msg_at THEN ch.created_at
+			ELSE rs.last_msg_at
+		END DESC
 		LIMIT 500`
-	database.DB.Raw(sql, args...).Scan(&rows)
+
+	var rows []inboxRow
+	if err := database.DB.Raw(baseSQL, args...).Scan(&rows).Error; err != nil || len(rows) == 0 {
+		// Fallback ke query lama jika InboxReadState kosong (fresh install / sebelum v4).
+		var legacyRows []struct {
+			Sender  string    `gorm:"column:sender"`
+			LastAt  time.Time `gorm:"column:last_at"`
+			LastMsg string    `gorm:"column:last_msg"`
+		}
+		legacySQL := `
+			SELECT ch.sender, ch.created_at AS last_at,
+				CASE WHEN TRIM(COALESCE(ch.message,''))!='' THEN ch.message
+					WHEN TRIM(COALESCE(ch.reply,''))!='' THEN ch.reply
+					WHEN ch.media_type!='' THEN CONCAT('[',ch.media_type,']') ELSE '' END AS last_msg
+			FROM chat_histories ch
+			WHERE ch.agent_id = ?
+			  AND ch.id = (
+				SELECT c2.id FROM chat_histories c2
+				WHERE c2.agent_id = ch.agent_id AND c2.sender = ch.sender
+				ORDER BY c2.created_at DESC, c2.id DESC LIMIT 1
+			  )`
+		legacyArgs := []any{id}
+		if labelFilter != "" {
+			legacySQL += ` AND ch.sender IN (SELECT sender FROM chat_labels WHERE agent_id = ? AND label_id = ?)`
+			legacyArgs = append(legacyArgs, id, labelFilter)
+		}
+		legacySQL += ` ORDER BY ch.created_at DESC LIMIT 500`
+		_ = database.DB.Raw(legacySQL, legacyArgs...).Scan(&legacyRows).Error
+		for _, r := range legacyRows {
+			rows = append(rows, inboxRow{Sender: r.Sender, CHLast: &r.LastAt, LastMsg: r.LastMsg})
+		}
+	}
+	// Gabungkan last_at di Go (hindari COALESCE string SQLite) + urutkan.
+	// PENTING: ambil yang PALING BARU antara state WA dan baris chat terakhir —
+	// bila chat baru tersimpan di identitas lain (LID), state bisa basi dan
+	// kontak jadi tenggelam di urutan ("hilang dari Semua").
+	for i := range rows {
+		if rows[i].RSLast == nil {
+			rows[i].RSLast = rows[i].CHLast
+			continue
+		}
+		if rows[i].CHLast != nil && rows[i].CHLast.After(*rows[i].RSLast) {
+			rows[i].RSLast = rows[i].CHLast
+		}
+	}
+	sort.SliceStable(rows, func(a, b int) bool {
+		ta, tb := rows[a].RSLast, rows[b].RSLast
+		if ta == nil {
+			return false
+		}
+		if tb == nil {
+			return true
+		}
+		return ta.After(*tb)
+	})
+	if len(rows) > 500 {
+		rows = rows[:500]
+	}
 
 	senders := make([]string, 0, len(rows))
 	for _, r := range rows {
@@ -261,7 +346,7 @@ func InboxContacts(c *gin.Context) {
 		}
 	}
 
-	// Label WhatsApp asli per percakapan (dipasang CS / tersinkron dari perangkat).
+	// Label WhatsApp asli per percakapan.
 	labels := map[string][]gin.H{}
 	if len(senders) > 0 {
 		var lr []struct {
@@ -282,31 +367,9 @@ func InboxContacts(c *gin.Context) {
 		}
 	}
 
-	// Unread = pesan masuk (from_human=false) dengan id > last_read_chat_id.
-	// Satu query gabungan (bukan N+1) — SUM(CASE…) lintas dialek SQLite/MySQL.
-	unread := map[string]int{}
-	if len(senders) > 0 {
-		var uc []struct {
-			Sender string `gorm:"column:sender"`
-			Cnt    int64  `gorm:"column:cnt"`
-		}
-		database.DB.Raw(`
-			SELECT ch.sender,
-				SUM(CASE WHEN ch.id > COALESCE(cr.last_read_chat_id, 0) THEN 1 ELSE 0 END) AS cnt
-			FROM chat_histories ch
-			LEFT JOIN conversation_reads cr
-				ON cr.agent_id = ch.agent_id AND cr.sender = ch.sender
-			WHERE ch.agent_id = ? AND ch.from_human = 0 AND ch.sender IN ?
-			GROUP BY ch.sender`, id, senders).Scan(&uc)
-		for _, u := range uc {
-			unread[u.Sender] = int(u.Cnt)
-		}
-	}
-
 	out := make([]gin.H, 0, len(rows))
 	for _, r := range rows {
 		msg := strings.TrimSpace(r.LastMsg)
-		// Normalisasi whitespace preview agar list tidak "melebar".
 		msg = strings.Join(strings.Fields(msg), " ")
 		if len([]rune(msg)) > 64 {
 			msg = string([]rune(msg)[:64]) + "…"
@@ -315,10 +378,14 @@ func InboxContacts(c *gin.Context) {
 		if rowLabels == nil {
 			rowLabels = []gin.H{}
 		}
+		lastAt := r.RSLast
+		if lastAt == nil {
+			lastAt = &time.Time{}
+		}
 		out = append(out, gin.H{
-			"sender": r.Sender, "last_at": r.LastAt, "last_msg": msg,
+			"sender": r.Sender, "last_at": *lastAt, "last_msg": msg,
 			"needs_human": needsHuman[r.Sender], "manual_pause_until": pauses[r.Sender],
-			"name": names[r.Sender], "labels": rowLabels, "unread_count": unread[r.Sender],
+			"name": names[r.Sender], "labels": rowLabels, "unread_count": r.Unread,
 		})
 	}
 	c.JSON(200, gin.H{"data": out})
@@ -326,6 +393,7 @@ func InboxContacts(c *gin.Context) {
 
 // MarkConversationRead — POST /agents/:id/inbox/:sender/read
 // Menandai percakapan terbaca sampai pesan terakhir saat ini.
+// v4: update InboxReadState.LastReadAt + WhatsAppUnreadCount sekaligus ConversationRead.
 func MarkConversationRead(c *gin.Context) {
 	id, ok := resolveAgent(c)
 	if !ok {
@@ -337,23 +405,31 @@ func MarkConversationRead(c *gin.Context) {
 		return
 	}
 	var last models.ChatHistory
-	if err := database.DB.Select("id").
+	if err := database.DB.Select("id", "created_at").
 		Where("agent_id = ? AND sender = ?", id, sender).
 		Order("id desc").First(&last).Error; err != nil {
-		// Tidak ada chat — tetap tandai agar UI konsisten.
 		c.JSON(200, gin.H{"data": gin.H{"sender": sender, "last_read_chat_id": 0}})
 		return
 	}
-	var rec models.ConversationRead
-	if database.DB.Where("agent_id = ? AND sender = ?", id, sender).First(&rec).Error == nil {
-		database.DB.Model(&rec).Updates(map[string]any{
-			"last_read_chat_id": last.ID, "updated_at": time.Now(),
-		})
-	} else {
-		database.DB.Create(&models.ConversationRead{
-			AgentID: id, Sender: sender, LastReadChatID: last.ID, UpdatedAt: time.Now(),
-		})
-	}
+
+	// Konsolidasi A6: InboxReadState = sumber kebenaran tunggal.
+	// ConversationRead (tabel lama) TIDAK lagi ditulis — dibiarkan sebagai
+	// arsip legacy; data lama tetap tersimpan.
+
+	// Update InboxReadState (v4) — reset unread count WA dan majukan batas baca.
+	readAt := last.CreatedAt
+	logIfErr(ensureInboxReadState(id, sender), "ensureInboxReadState markRead")
+	logIfErr(database.DB.Model(&models.InboxReadState{}).
+		Where("agent_id = ? AND sender = ?", id, sender).
+		Updates(map[string]any{
+			"last_read_at":           readAt,
+			"whats_app_unread_count": 0,
+			"updated_at":             time.Now(),
+		}).Error, "update InboxReadState markRead")
+
+	// Realtime: browser lain yang membuka inbox agent ini ikut update.
+	publishInboxEvent(id, sender, "state")
+	logCSActivity(c, id, sender, "read", "Membuka percakapan")
 	c.JSON(200, gin.H{"data": gin.H{"sender": sender, "last_read_chat_id": last.ID}})
 }
 
@@ -411,10 +487,10 @@ func DeleteInboxConversation(c *gin.Context) {
 	}
 
 	c.JSON(200, gin.H{
-		"message":        "Chat dihapus dari inbox",
-		"sender":         sender,
-		"deleted_chats":  res.RowsAffected,
-		"deleted_media":  len(seen),
+		"message":       "Chat dihapus dari inbox",
+		"sender":        sender,
+		"deleted_chats": res.RowsAffected,
+		"deleted_media": len(seen),
 	})
 }
 
@@ -430,6 +506,14 @@ func InboxConversation(c *gin.Context) {
 	if sender == "" {
 		c.JSON(400, gin.H{"error": "sender wajib"})
 		return
+	}
+	// Mesin deep-sync v4: bila pratinjau chat ini basi dibanding WA (chat bolong),
+	// tarik catch-up ringan di background — chat terisi sendiri tanpa klik apa pun.
+	if services.ChatPreviewStale(id, sender) {
+		agentID, senderNum := id, sender
+		services.Go("conversation-catch-up", func() {
+			_ = services.WA(agentID).RequestRecentChatCatchUp(senderNum, 100, time.Time{})
+		})
 	}
 
 	limit := 300 // default: tampung banyak percakapan
@@ -598,6 +682,7 @@ func InboxSend(c *gin.Context) {
 		return
 	}
 	logTurn(id, req.To, "", req.Message, true, req.ReplyTo, req.ReplyText)
+	logCSActivity(c, id, req.To, "reply", req.Message)
 	// Simpan WA message ID untuk keperluan revoke nanti
 	if waMsgID != "" {
 		_ = database.DB.Model(&models.ChatHistory{}).

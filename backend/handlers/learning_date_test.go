@@ -13,8 +13,8 @@ import (
 	"wa-assistant/backend/database"
 	"wa-assistant/backend/models"
 
-	sqlite "github.com/glebarez/sqlite"
 	"github.com/gin-gonic/gin"
+	sqlite "github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )
 
@@ -89,7 +89,9 @@ func TestStartLearningDefaults30Days(t *testing.T) {
 		t.Fatalf("code=%d body=%s", w.Code, w.Body.String())
 	}
 	var resp struct {
-		Data struct{ RunID uint `json:"run_id"` } `json:"data"`
+		Data struct {
+			RunID uint `json:"run_id"`
+		} `json:"data"`
 	}
 	_ = json.Unmarshal(w.Body.Bytes(), &resp)
 	start, end := runRangeFromDB(t, resp.Data.RunID)

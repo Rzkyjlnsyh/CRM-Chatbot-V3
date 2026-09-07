@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"regexp"
 	"strings"
 	"time"
@@ -15,22 +16,29 @@ import (
 )
 
 // ConversationBrief = ringkasan operasional untuk CS di inbox (bukan dikirim ke pelanggan).
+const ConversationBriefVersion = 2
+
 type ConversationBrief struct {
-	ContactHint   string   `json:"contact_hint"`   // nama/panggilan bila terdeteksi
-	Intent        string   `json:"intent"`         // kebutuhan utama 1 kalimat
-	Products      []string `json:"products"`       // produk/layanan disebut
-	KeyFacts      []string `json:"key_facts"`      // fakta penting (alamat, ukuran, budget…)
-	OpenItems     []string `json:"open_items"`     // yang masih perlu ditindaklanjuti
-	RiskFlags     []string `json:"risk_flags"`     // refund, komplain, dll.
-	Stage         string   `json:"stage"`          // new|info|interest|transaction|issue|done
-	Summary       string   `json:"summary"`        // 2–4 kalimat padat
-	Source        string   `json:"source"`         // heuristic|ai|hybrid
-	MessageCount  int      `json:"message_count"`
-	LastChatID    uint     `json:"last_chat_id"`
-	UpdatedAt     string   `json:"updated_at"`
-	NeedsHuman    bool     `json:"needs_human"`
-	Stale         bool     `json:"stale"` // true bila cache ketinggalan vs chat terbaru
-	Confidence    float64  `json:"confidence"`
+	Version      int      `json:"version"`       // versi algoritma/cache
+	ContactHint  string   `json:"contact_hint"`  // nama/panggilan bila terdeteksi
+	Intent       string   `json:"intent"`        // kebutuhan utama 1 kalimat
+	CurrentState string   `json:"current_state"` // kondisi percakapan paling akhir
+	WaitingFor   string   `json:"waiting_for"`   // cs|customer|none
+	Products     []string `json:"products"`      // produk/layanan disebut
+	KeyFacts     []string `json:"key_facts"`     // fakta penting (alamat, ukuran, budget…)
+	OpenItems    []string `json:"open_items"`    // yang masih perlu ditindaklanjuti
+	RiskFlags    []string `json:"risk_flags"`    // refund, komplain, dll.
+	Stage        string   `json:"stage"`         // new|info|interest|transaction|issue|done
+	Summary      string   `json:"summary"`       // 2–4 kalimat padat
+	Source       string   `json:"source"`        // heuristic|ai|hybrid
+	Enhancement  string   `json:"enhancement"`   // local|ai
+	EnhanceNote  string   `json:"enhancement_note,omitempty"`
+	MessageCount int      `json:"message_count"`
+	LastChatID   uint     `json:"last_chat_id"`
+	UpdatedAt    string   `json:"updated_at"`
+	NeedsHuman   bool     `json:"needs_human"`
+	Stale        bool     `json:"stale"` // true bila cache ketinggalan vs chat terbaru
+	Confidence   float64  `json:"confidence"`
 }
 
 type briefAIPayload struct {
@@ -44,56 +52,95 @@ type briefAIPayload struct {
 	Summary     string   `json:"summary"`
 }
 
-// BuildConversationBrief menyusun brief akurat: ekstraksi heuristik + AI terstruktur + validasi grounding.
-// force diabaikan di sini (cache diputus di handler); signature tetap untuk call-site yang eksplisit.
-func BuildConversationBrief(_ uint, _ string, msgs []models.ChatHistory, memory string, needsHuman bool, _ bool) (ConversationBrief, error) {
-	// msgs: kronologis lama→baru
+// BuildConversationBriefHeuristic merangkum percakapan tanpa panggilan AI.
+// Dipakai di GET inbox agar buka chat tidak membebani server / menunda UI.
+func BuildConversationBriefHeuristic(_ uint, _ string, msgs []models.ChatHistory, memory string, needsHuman bool) (ConversationBrief, error) {
 	lastID := uint(0)
 	if len(msgs) > 0 {
 		lastID = msgs[len(msgs)-1].ID
 	}
 	transcript := buildBriefTranscript(msgs)
-	// Grounding memakai transkrip + memori jangka panjang (fakta lama yang sudah diringkas).
 	groundSrc := transcript
 	if strings.TrimSpace(memory) != "" {
 		groundSrc = transcript + "\n" + memory
 	}
 	heuristic := extractBriefHeuristic(transcript, memory, needsHuman)
+	heuristic.Version = ConversationBriefVersion
 	heuristic.MessageCount = countBriefTurns(msgs)
 	heuristic.LastChatID = lastID
 	heuristic.NeedsHuman = needsHuman
+	refineBriefFromChronology(&heuristic, msgs, memory)
 	heuristic.UpdatedAt = time.Now().Format(time.RFC3339)
+	heuristic.Source = "heuristic"
+	heuristic.Enhancement = "local"
+	normalizeBriefCollections(&heuristic)
+	heuristic.Confidence = briefConfidence(heuristic, groundSrc)
+	if heuristic.Confidence < 0.4 {
+		heuristic.Confidence = 0.4
+	}
+	if heuristic.Summary == "" {
+		heuristic.Summary = joinNonEmpty(" · ", heuristic.Intent, strings.Join(heuristic.OpenItems, "; "))
+	}
+	return heuristic, nil
+}
 
+// BuildConversationBrief menyusun brief akurat: ekstraksi heuristik + AI terstruktur + validasi grounding.
+// force diabaikan di sini (cache diputus di handler); signature tetap untuk call-site yang eksplisit.
+func BuildConversationBrief(agentID uint, sender string, msgs []models.ChatHistory, memory string, needsHuman bool, _ bool) (ConversationBrief, error) {
+	// msgs: kronologis lama→baru
+	heuristic, err := BuildConversationBriefHeuristic(agentID, sender, msgs, memory, needsHuman)
+	if err != nil {
+		return heuristic, err
+	}
 	if len(msgs) < 2 && strings.TrimSpace(memory) == "" {
-		heuristic.Source = "heuristic"
-		heuristic.Summary = "Percakapan masih singkat. Belum cukup konteks untuk ringkasan lengkap."
-		heuristic.Confidence = 0.35
 		return heuristic, nil
 	}
 
-	// AI brief (structured)
-	aiPart, err := generateAIBrief(memory, transcript)
+	transcript := buildBriefTranscript(msgs)
+	groundSrc := transcript
+	if strings.TrimSpace(memory) != "" {
+		groundSrc = transcript + "\n" + memory
+	}
+
+	// AI brief (structured) — hanya path refresh/force.
+	aiPart, err := generateAIBrief(heuristic, transcript, needsHuman)
 	if err != nil {
-		// Fallback murni heuristik
-		heuristic.Source = "heuristic"
-		heuristic.Confidence = briefConfidence(heuristic, groundSrc)
-		if heuristic.Confidence < 0.45 {
-			heuristic.Confidence = 0.45
-		}
-		if heuristic.Summary == "" {
-			heuristic.Summary = joinNonEmpty(" · ", heuristic.Intent, strings.Join(heuristic.OpenItems, "; "))
-		}
+		log.Printf("Ringkasan AI agent %d tidak tersedia, memakai ringkasan lokal: %v", agentID, err)
+		heuristic.EnhanceNote = briefEnhancementNote(err)
 		return heuristic, nil
 	}
 
 	merged := mergeBriefs(heuristic, aiPart, groundSrc)
 	merged.MessageCount = heuristic.MessageCount
-	merged.LastChatID = lastID
+	merged.LastChatID = heuristic.LastChatID
 	merged.NeedsHuman = needsHuman
+	merged.Version = ConversationBriefVersion
 	merged.UpdatedAt = time.Now().Format(time.RFC3339)
 	merged.Source = "hybrid"
+	merged.Enhancement = "ai"
+	merged.EnhanceNote = ""
+	normalizeBriefCollections(&merged)
 	merged.Confidence = briefConfidence(merged, groundSrc)
 	return merged, nil
+}
+
+func briefEnhancementNote(err error) string {
+	if err == nil {
+		return ""
+	}
+	message := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(message, "prompt tokens limit"), strings.Contains(message, "context length"):
+		return "Batas konteks layanan AI tercapai; ringkasan lokal tetap digunakan."
+	case strings.Contains(message, "402"), strings.Contains(message, "payment required"), strings.Contains(message, "credit"):
+		return "Kuota layanan AI belum tersedia; ringkasan lokal tetap digunakan."
+	case strings.Contains(message, "api key"):
+		return "Layanan AI belum dikonfigurasi; ringkasan lokal tetap digunakan."
+	case strings.Contains(message, "deadline"), strings.Contains(message, "timeout"):
+		return "Layanan AI terlalu lama merespons; ringkasan lokal tetap digunakan."
+	default:
+		return "Layanan AI sedang tidak tersedia; ringkasan lokal tetap digunakan."
+	}
 }
 
 func buildBriefTranscript(msgs []models.ChatHistory) string {
@@ -131,6 +178,285 @@ func countBriefTurns(msgs []models.ChatHistory) int {
 		}
 	}
 	return n
+}
+
+type briefTurn struct {
+	Role      string
+	Text      string
+	MediaType string
+	FileName  string
+}
+
+func briefTurnsFromMessages(msgs []models.ChatHistory) []briefTurn {
+	turns := make([]briefTurn, 0, len(msgs)*2)
+	for _, msg := range msgs {
+		if text := strings.TrimSpace(msg.Message); text != "" {
+			turns = append(turns, briefTurn{Role: "customer", Text: text, MediaType: msg.MediaType, FileName: msg.FileName})
+		}
+		if text := strings.TrimSpace(msg.Reply); text != "" {
+			mediaType, fileName := "", ""
+			// Pada row media keluar, Message kosong dan Reply adalah caption/placeholder.
+			// Pada row gabungan incoming+balasan AI, media hanya milik pelanggan.
+			if strings.TrimSpace(msg.Message) == "" {
+				mediaType, fileName = msg.MediaType, msg.FileName
+			}
+			turns = append(turns, briefTurn{Role: "cs", Text: text, MediaType: mediaType, FileName: fileName})
+		}
+	}
+	return turns
+}
+
+func briefRecentText(turns []briefTurn, limit int) string {
+	if limit <= 0 || limit > len(turns) {
+		limit = len(turns)
+	}
+	var parts []string
+	for _, turn := range turns[len(turns)-limit:] {
+		parts = append(parts, turn.Text)
+	}
+	return strings.ToLower(strings.Join(parts, "\n"))
+}
+
+func containsAnyBrief(value string, needles ...string) bool {
+	for _, needle := range needles {
+		if strings.Contains(value, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func briefCustomerTurnsAreSmallTalk(turns []briefTurn) bool {
+	foundCustomer := false
+	for _, turn := range turns {
+		if turn.Role != "customer" {
+			continue
+		}
+		foundCustomer = true
+		text := strings.ToLower(strings.TrimSpace(turn.Text))
+		if len([]rune(text)) > 36 || containsAnyBrief(text,
+			"harga", "order", "pesan", "beli", "booking", "refund", "komplain",
+			"ongkir", "status", "resi", "internet", "gangguan", "tagihan", "bayar",
+		) {
+			return false
+		}
+	}
+	return foundCustomer
+}
+
+func briefCustomerClosed(text string) bool {
+	text = strings.ToLower(strings.TrimSpace(text))
+	if text == "" || containsAnyBrief(text, "belum selesai", "belum beres", "belum normal", "belum bisa") {
+		return false
+	}
+	return containsAnyBrief(text,
+		"terima kasih", "makasih", "trimakasih", "sudah jelas", "sudah beres",
+		"sudah selesai", "sudah normal", "sudah bisa", "oke sip", "oke siap",
+		"ok sip", "ok siap", "aman kak", "aman mas", "aman min",
+	) || text == "oke" || text == "ok" || text == "siap"
+}
+
+func briefCSWaitsForCustomer(text string) bool {
+	text = strings.ToLower(strings.TrimSpace(text))
+	return strings.Contains(text, "?") || containsAnyBrief(text,
+		"mohon konfirmasi", "tolong konfirmasi", "silakan cek", "silahkan cek",
+		"coba cek", "coba restart", "mohon kirim", "tolong kirim", "boleh kirim",
+		"boleh info", "mohon info", "tolong info", "kabari kami", "kabarin kami",
+		"pilih yang", "silakan pilih", "silahkan pilih", "mohon diisi", "tolong isi",
+	)
+}
+
+func briefCSPendingAction(text string) bool {
+	text = strings.ToLower(strings.TrimSpace(text))
+	if containsAnyBrief(text, "sudah kami cek", "sudah saya cek", "sudah diproses", "telah diproses", "sudah selesai") {
+		return false
+	}
+	return containsAnyBrief(text,
+		"akan kami cek", "akan saya cek", "kami cek dulu", "saya cek dulu", "sedang kami cek",
+		"akan kami proses", "akan saya proses", "sedang diproses", "kami tindak lanjuti",
+		"akan ditindaklanjuti", "saya koordinasikan", "kami koordinasikan", "mohon tunggu",
+		"tunggu sebentar", "nanti kami kabari", "nanti saya kabari",
+	)
+}
+
+func classifyCurrentBriefIntent(turns []briefTurn, fallbackIntent, fallbackStage string) (string, string) {
+	if len(turns) == 0 {
+		return fallbackIntent, fallbackStage
+	}
+	recent := briefRecentText(turns, 12)
+	tail := briefRecentText(turns, 3)
+	last := strings.ToLower(strings.TrimSpace(turns[len(turns)-1].Text))
+	if turns[len(turns)-1].Role == "customer" && briefCustomerClosed(last) {
+		return "Percakapan sudah ditangani", "done"
+	}
+	if containsAnyBrief(recent, "refund", "pengembalian dana", "komplain", "salah transfer", "penipuan", "barang rusak", "gangguan", "tidak bisa", "bermasalah") &&
+		!containsAnyBrief(tail, "sudah beres", "sudah selesai", "sudah normal", "sudah bisa") {
+		return "Keluhan atau kendala pelanggan", "issue"
+	}
+	if containsAnyBrief(recent, "status pesanan", "status order", "lacak", "resi") {
+		return "Menanyakan status pesanan atau pengiriman", "transaction"
+	}
+	if briefIntentRe.MatchString(recent) && containsAnyBrief(recent, "order", "pesan", "beli", "booking") {
+		return "Berminat melakukan pemesanan", "transaction"
+	}
+	if containsAnyBrief(recent, "ongkir", "ongkos kirim", "pengiriman") {
+		return "Menanyakan pengiriman atau ongkir", "interest"
+	}
+	if containsAnyBrief(recent, "harga", "berapa", "paket apa", "informasi produk", "info produk") {
+		return "Menanyakan harga atau informasi produk", "info"
+	}
+	if briefCustomerTurnsAreSmallTalk(turns) {
+		return "Sapaan dan percakapan ringan", "new"
+	}
+	if strings.TrimSpace(fallbackIntent) == "" || fallbackIntent == "Sapaan / awal percakapan" {
+		return "Percakapan umum dan tindak lanjut", "info"
+	}
+	return fallbackIntent, fallbackStage
+}
+
+func briefQuotedText(value string, limit int) string {
+	value = strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+	value = truncateRunesBrief(value, limit)
+	if value == "" {
+		return ""
+	}
+	return "“" + value + "”"
+}
+
+func isBriefMediaPlaceholder(text, mediaType string) bool {
+	text = strings.ToLower(strings.TrimSpace(text))
+	switch strings.ToLower(strings.TrimSpace(mediaType)) {
+	case "image":
+		return text == "📷 foto" || text == "foto" || text == "[image]"
+	case "video":
+		return text == "🎥 video" || text == "video" || text == "[video]"
+	case "audio":
+		return text == "🎤 pesan suara" || text == "pesan suara" || text == "[audio]"
+	case "sticker":
+		return text == "🌟 stiker" || text == "stiker" || text == "[sticker]"
+	case "document":
+		return text == "📎 dokumen" || text == "dokumen" || text == "[document]"
+	default:
+		return false
+	}
+}
+
+func describeBriefTurn(turn briefTurn) string {
+	text := strings.TrimSpace(turn.Text)
+	mediaType := strings.ToLower(strings.TrimSpace(turn.MediaType))
+	if mediaType == "" {
+		return briefQuotedText(text, 120)
+	}
+	label := map[string]string{
+		"image": "gambar", "video": "video", "audio": "pesan suara",
+		"sticker": "stiker", "document": "dokumen",
+	}[mediaType]
+	if label == "" {
+		label = "lampiran"
+	}
+	if mediaType == "document" && strings.TrimSpace(turn.FileName) != "" {
+		label += " " + briefQuotedText(turn.FileName, 70)
+	}
+	if text != "" && !isBriefMediaPlaceholder(text, mediaType) {
+		return label + " dengan keterangan " + briefQuotedText(text, 100)
+	}
+	return label
+}
+
+func briefIntentLead(intent string) string {
+	switch intent {
+	case "Sapaan dan percakapan ringan":
+		return "Percakapan masih berupa sapaan dan obrolan singkat."
+	case "Percakapan sudah ditangani":
+		return "Percakapan terlihat sudah ditangani."
+	case "Keluhan atau kendala pelanggan":
+		return "Pelanggan sedang menyampaikan keluhan atau kendala."
+	case "Menanyakan status pesanan atau pengiriman":
+		return "Pelanggan ingin mengetahui status pesanan atau pengiriman."
+	case "Berminat melakukan pemesanan":
+		return "Pelanggan menunjukkan minat untuk melakukan pemesanan."
+	case "Menanyakan pengiriman atau ongkir":
+		return "Pelanggan sedang menanyakan pengiriman atau ongkir."
+	case "Menanyakan harga atau informasi produk":
+		return "Pelanggan sedang mencari harga atau informasi produk."
+	case "Percakapan umum dan tindak lanjut":
+		return "Percakapan berisi komunikasi umum dan tindak lanjut dari CS."
+	default:
+		if strings.TrimSpace(intent) != "" {
+			return strings.TrimSuffix(strings.TrimSpace(intent), ".") + "."
+		}
+		return ""
+	}
+}
+
+func refineBriefFromChronology(brief *ConversationBrief, msgs []models.ChatHistory, memory string) {
+	turns := briefTurnsFromMessages(msgs)
+	brief.Intent, brief.Stage = classifyCurrentBriefIntent(turns, brief.Intent, brief.Stage)
+	brief.OpenItems = nil
+	if len(turns) == 0 {
+		brief.WaitingFor = "none"
+		brief.CurrentState = "Belum ada percakapan terbaru"
+		if strings.TrimSpace(memory) != "" {
+			brief.Summary = "Belum ada pesan terbaru. Konteks sebelumnya tetap tersedia pada riwayat pelanggan."
+		} else {
+			brief.Summary = "Belum ada isi percakapan yang dapat diringkas."
+		}
+		return
+	}
+
+	last := turns[len(turns)-1]
+	customerClosed := last.Role == "customer" && briefCustomerClosed(last.Text)
+	csWaitsForCustomer := last.Role == "cs" && briefCSWaitsForCustomer(last.Text)
+	csPendingAction := last.Role == "cs" && briefCSPendingAction(last.Text)
+	if brief.NeedsHuman {
+		brief.WaitingFor = "cs"
+		brief.CurrentState = "Perlu tindak lanjut CS"
+		brief.OpenItems = appendUniqueBrief(brief.OpenItems, "Tindak lanjuti percakapan dari antrean Butuh CS")
+	} else if customerClosed {
+		brief.WaitingFor = "none"
+		brief.CurrentState = "Percakapan selesai"
+	} else if last.Role == "customer" {
+		brief.WaitingFor = "cs"
+		brief.CurrentState = "Menunggu balasan CS"
+		brief.OpenItems = appendUniqueBrief(brief.OpenItems, "Balas pesan terakhir pelanggan: "+describeBriefTurn(last))
+	} else if csWaitsForCustomer {
+		brief.WaitingFor = "customer"
+		brief.CurrentState = "Menunggu jawaban pelanggan"
+		brief.OpenItems = appendUniqueBrief(brief.OpenItems, "Menunggu jawaban pelanggan atas "+briefQuotedText(last.Text, 100))
+	} else if csPendingAction {
+		brief.WaitingFor = "cs"
+		brief.CurrentState = "Sedang ditindaklanjuti CS"
+		brief.OpenItems = appendUniqueBrief(brief.OpenItems, "Selesaikan tindak lanjut yang disampaikan CS: "+briefQuotedText(last.Text, 100))
+	} else {
+		brief.WaitingFor = "none"
+		brief.CurrentState = "Sudah ditanggapi CS"
+	}
+
+	parts := make([]string, 0, 3)
+	if lead := briefIntentLead(brief.Intent); lead != "" {
+		parts = append(parts, lead)
+	}
+	if customerClosed {
+		parts = append(parts, "Pelanggan menutup percakapan dengan "+describeBriefTurn(last)+"; tidak ada balasan lanjutan yang perlu dikirim.")
+	} else if last.Role == "customer" {
+		if last.MediaType != "" {
+			parts = append(parts, "Pesan terakhir pelanggan berupa "+describeBriefTurn(last)+" dan belum dibalas.")
+		} else {
+			parts = append(parts, "Pesan terakhir pelanggan, "+describeBriefTurn(last)+", belum dibalas.")
+		}
+	} else if csWaitsForCustomer {
+		parts = append(parts, "CS sudah merespons dan sekarang menunggu jawaban pelanggan atas "+briefQuotedText(last.Text, 110)+".")
+	} else if csPendingAction {
+		parts = append(parts, "CS sudah merespons dan masih perlu menuntaskan tindak lanjut yang disampaikan melalui "+briefQuotedText(last.Text, 110)+".")
+	} else if last.MediaType != "" {
+		parts = append(parts, "CS sudah menanggapi dan terakhir mengirim "+describeBriefTurn(last)+".")
+	} else {
+		parts = append(parts, "CS sudah menanggapi; balasan terakhirnya "+describeBriefTurn(last)+".")
+	}
+	if brief.NeedsHuman {
+		parts = append(parts, "Percakapan masih perlu diselesaikan oleh CS.")
+	}
+	brief.Summary = truncateRunesBrief(strings.Join(parts, " "), 520)
 }
 
 var (
@@ -331,36 +657,41 @@ func extractBriefHeuristic(transcript, memory string, needsHuman bool) Conversat
 	return b
 }
 
-func generateAIBrief(memory, transcript string) (briefAIPayload, error) {
+func generateAIBrief(base ConversationBrief, transcript string, needsHuman bool) (briefAIPayload, error) {
 	p := activePreset()
 	if apiKeyForPreset(p) == "" {
 		return briefAIPayload{}, fmt.Errorf("API key belum dikonfigurasi")
 	}
-	// Batasi transcript
-	if r := []rune(transcript); len(r) > 10000 {
-		transcript = string(r[len(r)-10000:])
+	// OpenRouter akun terbatas dapat menolak prompt di atas 766 token. Heuristik
+	// lokal lebih dahulu memadatkan seluruh percakapan; AI hanya menerima basis
+	// terstruktur dan ekor chat aktual untuk memperhalus bahasa/konteks terbaru.
+	transcript = tailRunesBrief(transcript, 700)
+	basePayload := struct {
+		Intent       string   `json:"intent"`
+		CurrentState string   `json:"state"`
+		WaitingFor   string   `json:"waiting_for"`
+		Summary      string   `json:"summary"`
+		KeyFacts     []string `json:"facts"`
+		OpenItems    []string `json:"open"`
+		RiskFlags    []string `json:"risks"`
+	}{
+		Intent:       truncateRunesBrief(base.Intent, 80),
+		CurrentState: truncateRunesBrief(base.CurrentState, 60),
+		WaitingFor:   base.WaitingFor,
+		Summary:      truncateRunesBrief(base.Summary, 240),
+		KeyFacts:     compactBriefList(base.KeyFacts, 3, 60),
+		OpenItems:    compactBriefList(base.OpenItems, 2, 80),
+		RiskFlags:    compactBriefList(base.RiskFlags, 2, 50),
 	}
-	if r := []rune(memory); len(r) > 2000 {
-		memory = string(r[:2000])
-	}
-	sys := `Kamu asisten operasional CS. Buat RINGKASAN INTERNAL untuk petugas inbox (bukan balasan ke pelanggan).
-Tulis ramah, jelas, mudah dibaca cepat di HP/desktop. Hanya dari MEMORI + TRANSKRIP. Jangan mengarang.
-Output HANYA JSON objek:
+	baseJSON, _ := json.Marshal(basePayload)
+	sys := `Kamu analis internal Customer Service. Dari BASIS dan CHAT terbaru, keluarkan HANYA JSON:
 {
-  "contact_hint": "nama/panggilan jika ada, else empty",
-  "intent": "1 kalimat: apa yang diinginkan pelanggan (bahasa sehari-hari)",
-  "products": ["produk/layanan disebut"],
-  "key_facts": ["fakta penting dalam frasa pendek: alamat, ukuran, budget, jadwal — max 8"],
-  "open_items": ["tugas CS yang actionable, diawali kata kerja: Konfirmasi…, Cek…, Balas… — max 5"],
-  "risk_flags": ["refund/komplain/penipuan/dll bila ada — label singkat"],
+  "contact_hint":"", "intent":"", "products":[], "key_facts":[],
+  "open_items":[], "risk_flags":[],
   "stage": "new|info|interest|transaction|issue|done",
-  "summary": "2-3 kalimat padat: konteks + status + apa yang penting diingat"
+  "summary": "2-3 kalimat natural dan padat"
 }
-Aturan ketat:
-- angka/harga/jam/nomor hanya jika tertulis di sumber
-- open_items = yang masih perlu dikerjakan, bukan riwayat
-- jangan sebut "AI" atau "bot" di summary
-- bahasa Indonesia natural, tanpa jargon teknis`
+Aturan: terbaru mengalahkan konteks lama; bedakan Pelanggan dan CS; yang sudah dijawab/selesai bukan open item; media keluar adalah tindakan CS, bukan eskalasi; jangan mengarang fakta/angka; jangan sebut AI/bot; gunakan bahasa Indonesia luwes tanpa label kaku.`
 
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
@@ -368,10 +699,13 @@ Aturan ketat:
 		Model: p.Model,
 		Messages: []openai.ChatCompletionMessage{
 			{Role: openai.ChatMessageRoleSystem, Content: sys},
-			{Role: openai.ChatMessageRoleUser, Content: "MEMORI:\n" + memory + "\n\nTRANSKRIP:\n" + transcript},
+			{Role: openai.ChatMessageRoleUser, Content: fmt.Sprintf(
+				"BUTUH_CS=%t\nBASIS=%s\nCHAT_LAMA_KE_BARU:\n%s",
+				needsHuman, baseJSON, transcript,
+			)},
 		},
-		MaxTokens:   800,
-		Temperature: 0.15,
+		MaxTokens:   420,
+		Temperature: 0.1,
 	})
 	if err != nil {
 		return briefAIPayload{}, err
@@ -394,6 +728,9 @@ Aturan ketat:
 	if err := json.Unmarshal([]byte(raw), &out); err != nil {
 		return briefAIPayload{}, err
 	}
+	if !validBriefStage(out.Stage) {
+		out.Stage = ""
+	}
 	return out, nil
 }
 
@@ -402,23 +739,28 @@ func mergeBriefs(h ConversationBrief, ai briefAIPayload, transcript string) Conv
 	srcNumbers := normalizedFactNumbers(transcript)
 
 	out := h
-	if strings.TrimSpace(ai.ContactHint) != "" {
+	if strings.TrimSpace(ai.ContactHint) != "" && briefPhraseGrounded(ai.ContactHint, transcript, srcNumbers, srcTokens, 0.45) {
 		out.ContactHint = strings.TrimSpace(ai.ContactHint)
 	}
-	if strings.TrimSpace(ai.Intent) != "" {
+	// Intent dan stage dari kronologi lebih dapat dipercaya daripada tebakan AI.
+	// AI hanya boleh memperjelas intent yang masih generik; status akhir tetap
+	// berasal dari urutan pesan nyata di refineBriefFromChronology.
+	if (strings.TrimSpace(h.Intent) == "" || h.Intent == "Percakapan umum dan tindak lanjut") &&
+		strings.TrimSpace(ai.Intent) != "" &&
+		briefPhraseGrounded(ai.Intent, transcript, srcNumbers, srcTokens, 0.3) &&
+		briefActionGrounded(ai.Intent, transcript) {
 		out.Intent = strings.TrimSpace(ai.Intent)
 	}
-	if st := strings.ToLower(strings.TrimSpace(ai.Stage)); st != "" {
-		out.Stage = st
-	}
-	if s := strings.TrimSpace(ai.Summary); s != "" {
-		out.Summary = s
+	if s := strings.TrimSpace(ai.Summary); s != "" &&
+		briefPhraseGrounded(s, transcript, srcNumbers, srcTokens, 0.14) &&
+		briefActionGrounded(s, transcript) {
+		out.Summary = truncateRunesBrief(s, 600)
 	}
 
 	// Products: union, max 8
 	for _, p := range ai.Products {
 		p = strings.TrimSpace(p)
-		if p != "" {
+		if p != "" && briefPhraseGrounded(p, transcript, srcNumbers, srcTokens, 0.35) {
 			out.Products = appendUniqueBrief(out.Products, p)
 		}
 	}
@@ -452,8 +794,11 @@ func mergeBriefs(h ConversationBrief, ai briefAIPayload, transcript string) Conv
 
 	var opens []string
 	for _, o := range ai.OpenItems {
-		o = strings.TrimSpace(o)
-		if o != "" {
+		o = normalizeBriefOpenItem(o)
+		if o != "" &&
+			briefPhraseGrounded(o, transcript, srcNumbers, srcTokens, 0.2) &&
+			briefActionGrounded(o, transcript) &&
+			briefOpenItemMatchesState(o, h.WaitingFor) {
 			opens = appendUniqueBrief(opens, o)
 		}
 	}
@@ -468,7 +813,7 @@ func mergeBriefs(h ConversationBrief, ai briefAIPayload, transcript string) Conv
 	var risks []string
 	for _, r := range ai.RiskFlags {
 		r = strings.TrimSpace(r)
-		if r != "" {
+		if r != "" && briefPhraseGrounded(r, transcript, srcNumbers, srcTokens, 0.18) {
 			risks = appendUniqueBrief(risks, r)
 		}
 	}
@@ -477,6 +822,124 @@ func mergeBriefs(h ConversationBrief, ai briefAIPayload, transcript string) Conv
 	}
 	out.RiskFlags = risks
 	return out
+}
+
+func validBriefStage(stage string) bool {
+	switch strings.ToLower(strings.TrimSpace(stage)) {
+	case "new", "info", "interest", "transaction", "issue", "done":
+		return true
+	default:
+		return false
+	}
+}
+
+var briefGroundingStopwords = map[string]bool{
+	"ada": true, "agar": true, "akan": true, "atau": true, "bahwa": true,
+	"belum": true, "bisa": true, "buat": true, "dalam": true, "dan": true,
+	"dari": true, "dengan": true, "dia": true, "ini": true, "itu": true,
+	"jadi": true, "juga": true, "karena": true, "kepada": true, "lagi": true,
+	"masih": true, "mereka": true, "oleh": true, "pada": true, "pelanggan": true,
+	"percakapan": true, "saat": true, "sampai": true, "saya": true, "sebagai": true,
+	"sekarang": true, "sedang": true, "setelah": true, "sudah": true, "telah": true,
+	"terakhir": true, "tersebut": true, "tidak": true, "untuk": true, "yang": true,
+	"ingin": true, "perlu": true, "terlihat": true, "menjadi": true, "customer": true,
+	"manusia": true,
+}
+
+func briefSubstantiveTokens(value string) map[string]bool {
+	tokens := contentTokenSet(value)
+	for token := range tokens {
+		if briefGroundingStopwords[token] {
+			delete(tokens, token)
+		}
+	}
+	return tokens
+}
+
+// briefPhraseGrounded menjaga hasil AI tetap menempel pada teks sumber. Selain
+// memblokir angka baru, minimal satu kata bermakna harus benar-benar ada di
+// percakapan. Ini sengaja lebih ketat daripada sekadar valid JSON.
+func briefPhraseGrounded(
+	value, source string,
+	srcNumbers map[string]bool,
+	_ map[string]bool,
+	minOverlap float64,
+) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	for number := range normalizedFactNumbers(value) {
+		if !srcNumbers[number] {
+			return false
+		}
+	}
+	normalizedValue := strings.ToLower(strings.Join(strings.Fields(value), " "))
+	normalizedSource := strings.ToLower(strings.Join(strings.Fields(source), " "))
+	if normalizedValue != "" && strings.Contains(normalizedSource, normalizedValue) {
+		return true
+	}
+	candidateTokens := briefSubstantiveTokens(value)
+	if len(candidateTokens) == 0 {
+		return false
+	}
+	sourceTokens := briefSubstantiveTokens(source)
+	hits := 0
+	for token := range candidateTokens {
+		if sourceTokens[token] {
+			hits++
+		}
+	}
+	if hits == 0 {
+		return false
+	}
+	return float64(hits)/float64(len(candidateTokens)) >= minOverlap
+}
+
+// Pernyataan tindakan sensitif tidak boleh muncul hanya karena parafrase AI.
+// Bila AI menyebut beli/refund/selesai, sumber harus memuat sinyal sejenis.
+func briefActionGrounded(value, source string) bool {
+	value = strings.ToLower(value)
+	source = strings.ToLower(source)
+	checks := []struct {
+		claims []string
+		source []string
+	}{
+		{[]string{"beli", "memesan", "pemesanan", "order", "booking"}, []string{"beli", "pesan", "pemesanan", "order", "booking", "mau ambil"}},
+		{[]string{"refund", "pengembalian dana"}, []string{"refund", "pengembalian dana", "uang kembali"}},
+		{[]string{"sudah selesai", "sudah beres", "sudah normal", "telah selesai"}, []string{"sudah selesai", "sudah beres", "sudah normal", "sudah bisa", "terima kasih", "makasih"}},
+		{[]string{"penipuan", "ditipu"}, []string{"penipuan", "ditipu", "penipu"}},
+	}
+	for _, check := range checks {
+		if containsAnyBrief(value, check.claims...) && !containsAnyBrief(source, check.source...) {
+			return false
+		}
+	}
+	return true
+}
+
+func briefOpenItemMatchesState(item, waitingFor string) bool {
+	item = strings.ToLower(strings.TrimSpace(item))
+	if waitingFor != "customer" {
+		return true
+	}
+	// Sesudah CS bertanya, pekerjaan aktif ada di pelanggan. Jangan ubah menjadi
+	// instruksi palsu agar CS membalas lagi.
+	return containsAnyBrief(item, "menunggu", "tunggu jawaban", "jawaban pelanggan") &&
+		!containsAnyBrief(item, "balas pelanggan", "hubungi pelanggan", "kirim pelanggan")
+}
+
+func normalizeBriefOpenItem(value string) string {
+	value = strings.TrimSpace(value)
+	value = strings.TrimSpace(strings.TrimLeft(value, "-*•0123456789. )"))
+	value = strings.Join(strings.Fields(value), " ")
+	value = strings.TrimRight(value, ";")
+	if value == "" {
+		return ""
+	}
+	runes := []rune(value)
+	runes[0] = unicode.ToUpper(runes[0])
+	return truncateRunesBrief(string(runes), 180)
 }
 
 func factGrounded(fact string, srcNumbers map[string]bool, srcTokens map[string]bool) bool {
@@ -600,6 +1063,28 @@ func appendUniqueBrief(list []string, item string) []string {
 	return append(list, item)
 }
 
+func normalizeBriefCollections(brief *ConversationBrief) {
+	if brief.Enhancement == "" {
+		if brief.Source == "hybrid" || brief.Source == "ai" {
+			brief.Enhancement = "ai"
+		} else {
+			brief.Enhancement = "local"
+		}
+	}
+	if brief.Products == nil {
+		brief.Products = []string{}
+	}
+	if brief.KeyFacts == nil {
+		brief.KeyFacts = []string{}
+	}
+	if brief.OpenItems == nil {
+		brief.OpenItems = []string{}
+	}
+	if brief.RiskFlags == nil {
+		brief.RiskFlags = []string{}
+	}
+}
+
 func joinNonEmpty(sep string, parts ...string) string {
 	var out []string
 	for _, p := range parts {
@@ -618,6 +1103,30 @@ func truncateRunesBrief(s string, n int) string {
 	return string(r[:n]) + "…"
 }
 
+func tailRunesBrief(value string, limit int) string {
+	runes := []rune(strings.TrimSpace(value))
+	if limit <= 0 || len(runes) <= limit {
+		return string(runes)
+	}
+	return "…" + string(runes[len(runes)-limit:])
+}
+
+func compactBriefList(values []string, maxItems, maxRunes int) []string {
+	if maxItems <= 0 || len(values) == 0 {
+		return []string{}
+	}
+	if len(values) < maxItems {
+		maxItems = len(values)
+	}
+	out := make([]string, 0, maxItems)
+	for _, value := range values[:maxItems] {
+		if value = strings.TrimSpace(value); value != "" {
+			out = append(out, truncateRunesBrief(value, maxRunes))
+		}
+	}
+	return out
+}
+
 // Encode/decode brief cache
 func EncodeBrief(b ConversationBrief) string {
 	raw, _ := json.Marshal(b)
@@ -632,6 +1141,7 @@ func DecodeBrief(raw string) (ConversationBrief, bool) {
 	if err := json.Unmarshal([]byte(raw), &b); err != nil {
 		return b, false
 	}
+	normalizeBriefCollections(&b)
 	return b, true
 }
 

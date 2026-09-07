@@ -10,6 +10,7 @@ import LogoutIcon from '@mui/icons-material/Logout';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
 import EditIcon from '@mui/icons-material/EditOutlined';
+import AttachFileIcon from '@mui/icons-material/AttachFile';
 import ManageAccountsOutlinedIcon from '@mui/icons-material/ManageAccountsOutlined';
 import QrCodeIcon from '@mui/icons-material/QrCode';
 import DialpadIcon from '@mui/icons-material/Dialpad';
@@ -28,7 +29,7 @@ import ShieldIcon from '@mui/icons-material/ShieldOutlined';
 import ContactsIcon from '@mui/icons-material/ContactsOutlined';
 import PersonIcon from '@mui/icons-material/Person';
 import { QRCodeSVG } from 'qrcode.react';
-import logo from '../assets/logo-slaludiskon.png';
+import logo from '../assets/logo-crm-dashboard.png';
 import api from '../services/api';
 import { swalConfirm, swalAlert, swalToast } from '../services/swal';
 import SettingsIcon from '@mui/icons-material/Settings';
@@ -51,7 +52,9 @@ import MetaCapiPanel from '../components/MetaCapiPanel';
 import PipelinePanel from '../components/PipelinePanel';
 import FlowPanel from '../components/FlowPanel';
 import ApiPanel from '../components/ApiPanel';
+import LincahPanel from '../components/LincahPanel';
 import ApiIcon from '@mui/icons-material/ApiOutlined';
+import LocalShippingIcon from '@mui/icons-material/LocalShippingOutlined';
 import WidgetPanel from '../components/WidgetPanel';
 import WidgetsIcon from '@mui/icons-material/WidgetsOutlined';
 import AccountTreeIcon from '@mui/icons-material/AccountTreeOutlined';
@@ -61,6 +64,8 @@ import FollowUpPanel from '../components/FollowUpPanel';
 import ProductPanel from '../components/ProductPanel';
 import GroupGuardPanel from '../components/GroupGuardPanel';
 import StatusPanel from '../components/StatusPanel';
+import TeamPanel from '../components/TeamPanel';
+import PeopleAltIcon from '@mui/icons-material/PeopleAlt';
 import AutoStoriesIcon from '@mui/icons-material/AutoStoriesOutlined';
 import PermMediaOutlinedIcon from '@mui/icons-material/PermMediaOutlined';
 import PageHeader from '../components/PageHeader';
@@ -233,8 +238,10 @@ const NAV_GROUPS = [
   ] },
   { section: 'Akun', items: [
     { id: 'ai-model', label: 'AI & Model', icon: <AutoAwesomeIcon fontSize="small" /> },
+    { id: 'tim-cs', label: 'Tim CS', icon: <PeopleAltIcon fontSize="small" /> },
     { id: 'widget', label: 'Widget & Link', icon: <WidgetsIcon fontSize="small" /> },
     { id: 'api', label: 'REST API', icon: <ApiIcon fontSize="small" /> },
+    { id: 'lincah', label: 'Lincah', icon: <LocalShippingIcon fontSize="small" /> },
     { id: 'settings', label: 'Pengaturan', icon: <SettingsIcon fontSize="small" /> },
     
   ] },
@@ -281,6 +288,8 @@ export default function Dashboard() {
   const [knowledgeErrors, setKnowledgeErrors] = useState<Record<string, string>>({});
   const [editingKnowledge, setEditingKnowledge] = useState<KnowledgeItem | null>(null);
   const [editingKnowledgeDraft, setEditingKnowledgeDraft] = useState({ question: '', answer: '', tags: '' });
+  const [knowledgeImageFile, setKnowledgeImageFile] = useState<File | null>(null);
+  const knowledgeImageRef = useRef<HTMLInputElement>(null);
   const [editingAIForm, setEditingAIForm] = useState<AIForm | null>(null);
   const [aiFormName, setAIFormName] = useState('');
   const [aiFormGoal, setAIFormGoal] = useState('');
@@ -642,7 +651,7 @@ export default function Dashboard() {
       await api.put('/settings/api-config', apiConfig);
       swalToast('Konfigurasi AI disimpan. Model langsung aktif.', 'success');
       // Refresh daftar model setelah simpan (karena api key mungkin baru)
-      if (apiConfig.api_key) {
+      if (apiConfig.api_key || apiConfig.deepseek_api_key) {
         void loadChatModels();
         void loadVisionModels();
         void loadEmbeddingModels();
@@ -704,7 +713,7 @@ export default function Dashboard() {
       if (cfg.api_model) setApiModel(cfg.api_model);
       if (cfg.vision_model) setVisionModel(cfg.vision_model);
       if (cfg.embedding_model) setEmbeddingModel(cfg.embedding_model);
-      if (cfg.api_key) {
+      if (cfg.api_key || cfg.deepseek_api_key) {
         void loadChatModels();
         void loadVisionModels();
         void loadEmbeddingModels();
@@ -964,10 +973,10 @@ export default function Dashboard() {
                 bgcolor: 'background.paper', overflow: 'hidden',
               }}
             >
-              <img src={logo} alt="SlaluDiskon" style={{ width: 28, height: 28 }} />
+              <img src={logo} alt="CRM Dashboard" style={{ width: 28, height: 28 }} />
             </Box>
             <Box sx={{ minWidth: 0, display: { xs: 'none', sm: 'block' } }}>
-              <Typography sx={{ fontWeight: 600, fontSize: 14, lineHeight: 1.2, letterSpacing: '-0.01em' }}>SlaluDiskon</Typography>
+              <Typography sx={{ fontWeight: 600, fontSize: 14, lineHeight: 1.2, letterSpacing: '-0.01em' }}>CRM Dashboard</Typography>
               <Typography
                 variant="caption"
                 color="text.secondary"
@@ -2224,7 +2233,7 @@ export default function Dashboard() {
               <Button
                 variant="contained"
                 onClick={saveAPIConfigOnly}
-                disabled={!apiKey}
+                disabled={chatProvider === 'deepseek-direct' ? !deepseekKey : !apiKey}
                 startIcon={<AutoAwesomeIcon />}
                 fullWidth
                 sx={{ fontWeight: 700 }}
@@ -2397,8 +2406,10 @@ export default function Dashboard() {
         {tab === 'meta-capi' && <MetaCapiPanel agentId={agentId} />}
         {tab === 'alur' && <FlowPanel agentId={agentId} />}
         {tab === 'api' && <ApiPanel agentId={agentId} onOpenDashboard={() => setTab('dashboard')} />}
+        {tab === 'lincah' && <LincahPanel agentId={agentId} />}
         {tab === 'widget' && <WidgetPanel agentId={agentId} />}
         {tab === 'status' && <StatusPanel agentId={agentId} />}
+        {tab === 'tim-cs' && <TeamPanel agents={agents} />}
         {tab === 'kontak' && (
           <ContactsPanel agentId={agentId}
             onBroadcast={(recipients) => { setSeed({ kind: 'broadcast', value: recipients, n: Date.now() }); setTab('broadcast'); }}
@@ -2697,8 +2708,7 @@ export default function Dashboard() {
             <TextField label="Password lama" size="small" type="password" fullWidth value={profileOldPassword} onChange={e => setProfileOldPassword(e.target.value)} />
             <TextField label="Password baru" size="small" type="password" fullWidth value={profileNewPassword} onChange={e => setProfileNewPassword(e.target.value)} helperText="Minimal 8 karakter" />
             <Divider />
-            <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Lisensi</Typography>
-            <TextField label="License Key" size="small" fullWidth value={localStorage.getItem('licenseKeyHint') || '(tersimpan di .env)'} disabled helperText="Lisensi tersimpan di .env." />
+            <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Akun</Typography>
             <Alert severity="info" sx={{ mt: 0.5 }}>
               <Typography variant="caption">
                 Konfigurasi OpenRouter (model AI & API key) dipindahkan ke menu <b>AI & Model</b> di sidebar.
@@ -2805,6 +2815,20 @@ Bantu pelanggan sampai jelas, tertarik, dan siap order. Jika pelanggan sudah men
               onChange={e => setEditingKnowledgeDraft(d => ({ ...d, answer: e.target.value }))} />
             <TextField size="small" label="Tags (pisahkan dengan koma)" value={editingKnowledgeDraft.tags}
               onChange={e => setEditingKnowledgeDraft(d => ({ ...d, tags: e.target.value }))} />
+            <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+              <Button size="small" variant="outlined" startIcon={<AttachFileIcon />}
+                onClick={() => knowledgeImageRef.current?.click()}>
+                {knowledgeImageFile ? 'Ganti Gambar' : 'Lampirkan Gambar'}
+              </Button>
+              {knowledgeImageFile && (
+                <>
+                  <Box component="span" sx={{ fontSize: 12, color: 'text.secondary' }}>{knowledgeImageFile.name}</Box>
+                  <Button size="small" color="error" onClick={() => setKnowledgeImageFile(null)}>Batal</Button>
+                </>
+              )}
+              <input ref={knowledgeImageRef} type="file" hidden accept="image/*"
+                onChange={e => setKnowledgeImageFile(e.target.files?.[0] || null)} />
+            </Stack>
           </Stack>
         </DialogContent>
         <DialogActions>
@@ -2813,7 +2837,7 @@ Bantu pelanggan sampai jelas, tertarik, dan siap order. Jika pelanggan sudah men
             onClick={async () => {
               if (!editingKnowledge) return;
               try {
-                await updateKnowledgeMut.mutateAsync({ id: editingKnowledge.id, ...editingKnowledgeDraft });
+                await updateKnowledgeMut.mutateAsync({ id: editingKnowledge.id, ...editingKnowledgeDraft, file: knowledgeImageFile });
                 setEditingKnowledge(null);
                 swalToast('FAQ diperbarui', 'success');
               } catch (error) {

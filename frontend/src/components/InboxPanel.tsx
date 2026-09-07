@@ -26,11 +26,16 @@ import InsertEmoticonIcon from '@mui/icons-material/InsertEmoticon';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import PhoneOutlinedIcon from '@mui/icons-material/PhoneOutlined';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
+import SyncIcon from '@mui/icons-material/Sync';
 import {
   useContacts, useConversation, useConversationBrief, useRefreshConversationBrief,
   useSendMessage, useSendMedia, postAgentTyping, useRevokeMessage, useResumeBot, useReanalyzeImage,
   useDeleteInboxConversation, useLoadOlderMessages, useMarkConversationRead, useLabels,
+  useInboxRealtime, useLinkPreview, useRequestHistoryResync, type InboxLiveEvent,
 } from '../hooks';
+import { playInboxSound } from '../services/inboxSound';
+import api from '../services/api';
+import { useQueryClient } from '@tanstack/react-query';
 import TemplatePicker from './TemplatePicker';
 import { swalConfirm, swalToast } from '../services/swal';
 import type { ChatMsg, Contact, ConversationBrief } from '../types';
@@ -55,6 +60,29 @@ const WA = {
 
 function MediaView({ agentId, m, token }: { agentId: number; m: ChatMsg; token: string }) {
   const [zoom, setZoom] = useState<string | null>(null);
+  const qc = useQueryClient();
+  // Media riwayat WA (HistorySync): belum ada file lokal → tombol unduh
+  // on-demand (pola v4). Berlaku untuk SEMUA pesan (termasuk balasan CS &
+  // media dari_human) — tanpa ini, <img> menembak /media/:id berulang → 404.
+  if (m.media_type && !m.media_path) {
+    const failed = m.media_fetch_status === 'failed';
+    return (
+      <Button
+        size="small"
+        variant="outlined"
+        onClick={async () => {
+          try {
+            await api.get(`/agents/${agentId}/history-media/${m.id}`, { responseType: 'blob' });
+          } catch {
+            // gagal → status failed di server; refetch tetap agar UI tahu
+          }
+          await qc.invalidateQueries({ queryKey: ['conversation', agentId, m.sender] });
+        }}
+      >
+        {failed ? 'Coba unduh media lagi' : 'Unduh media riwayat'}
+      </Button>
+    );
+  }
   const url = `/api/agents/${agentId}/media/${m.id}?token=${token}`;
   if (m.media_type === 'image' || m.media_type === 'sticker') {
     return (
@@ -120,10 +148,83 @@ function avatarColor(seed: string) {
   return colors[h % colors.length];
 }
 
+/** URL foto profil (pola v4): <img> memakai ?token= karena tidak bisa header auth. */
+function profilePictureURL(agentId: number, sender: string, token: string) {
+  if (!agentId || !sender || !token) return undefined;
+  return `/api/agents/${agentId}/profile-picture?sender=${encodeURIComponent(sender)}&token=${encodeURIComponent(token)}`;
+}
+
+/** Avatar kontak: foto profil WA bila tersedia; inisial sebagai fallback.
+ *  LAZY (pola v4): hanya diminta saat baris MASUK viewport — tanpa ini,
+ *  semua baris terlihat langsung meminta foto → WhatsApp membatasi (rate
+ *  limit) → console penuh 404. Grup & LID tidak diminta sama sekali. */
+const LazyContactAvatar = memo(function LazyContactAvatar({
+  agentId, sender, label, isGroup,
+}: {
+  agentId: number;
+  sender: string;
+  label: string;
+  isGroup: boolean;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [src, setSrc] = useState<string | undefined>(undefined);
+  const [failed, setFailed] = useState(false);
+  const [active, setActive] = useState(false);
+  const token = typeof localStorage !== 'undefined' ? localStorage.getItem('token') || '' : '';
+
+  // Grup tersimpan kadang tanpa @g.us → deteksi juga dari panjang ID (18+ digit).
+  const skip = isGroup || sender.replace(/\D/g, '').length >= 18 || !token;
+
+  useEffect(() => {
+    if (skip || active || !ref.current) return;
+    const el = ref.current;
+    if (typeof IntersectionObserver === 'undefined') {
+      setActive(true);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setActive(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: '200px' },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [skip, active]);
+
+  useEffect(() => {
+    if (skip || !active) return;
+    const url = profilePictureURL(agentId, sender, token);
+    if (!url) return;
+    let cancel = false;
+    const img = new Image();
+    img.onload = () => { if (!cancel) setSrc(url); };
+    img.onerror = () => { if (!cancel) setFailed(true); };
+    img.src = url;
+    return () => { cancel = true; };
+  }, [agentId, sender, skip, active, token]);
+
+  if (src && !failed) {
+    return (
+      <Avatar src={src} sx={{ width: 49, height: 49, fontSize: 18, fontWeight: 600, bgcolor: avatarColor(sender), color: '#fff', flexShrink: 0 }} />
+    );
+  }
+  return (
+    <Box ref={ref} sx={{ display: 'contents' }}>
+      <Avatar sx={{ width: 49, height: 49, fontSize: 18, fontWeight: 600, bgcolor: avatarColor(sender), color: '#fff', flexShrink: 0 }}>
+        {label}
+      </Avatar>
+    </Box>
+  );
+});
+
 /* ─── Bubble (memo) ─────────────────────────────────────────────────────── */
 
 const Bubble = memo(function Bubble({
-  side, tag, time, name, replyTo, onReply, children, isCS,
+  side, tag, time, name, replyTo, onReply, children, isCS, delivery,
 }: {
   side: 'left' | 'right';
   tag?: string;
@@ -133,6 +234,7 @@ const Bubble = memo(function Bubble({
   onReply?: () => void;
   children: ReactNode;
   isCS?: boolean;
+  delivery?: string;
 }) {
   const isLeft = side === 'left';
   return (
@@ -213,7 +315,7 @@ const Bubble = memo(function Bubble({
             )}
             {!isLeft && isCS && (
               <Box component="span" sx={{ fontSize: 12, color: WA.tick, lineHeight: 1, letterSpacing: -1 }}>
-                ✓✓
+                {delivery === 'read' || delivery === 'played' ? '✓✓' : '✓'}
               </Box>
             )}
             <IconButton
@@ -427,13 +529,14 @@ function labelHex(c: string): string {
 /* ─── Contact row (memo) ────────────────────────────────────────────────── */
 
 const ContactRow = memo(function ContactRow({
-  ct, selected, onSelect, onDelete, deleting,
+  ct, selected, onSelect, onDelete, deleting, agentId,
 }: {
   ct: Contact;
   selected: boolean;
   onSelect: (sender: string) => void;
   onDelete: (sender: string) => void;
   deleting?: boolean;
+  agentId: number;
 }) {
   const label = ct.name || `+${ct.sender}`;
   const initial = label.charAt(0).toUpperCase();
@@ -470,19 +573,7 @@ const ContactRow = memo(function ContactRow({
           cursor: 'pointer',
         }}
       >
-        <Avatar
-          sx={{
-            width: 49,
-            height: 49,
-            fontSize: 18,
-            fontWeight: 600,
-            bgcolor: avatarColor(ct.sender),
-            color: '#fff',
-            flexShrink: 0,
-          }}
-        >
-          {initial}
-        </Avatar>
+        <LazyContactAvatar agentId={agentId} sender={ct.sender} label={initial} isGroup={ct.sender.includes('@g.us')} />
         <Box sx={{ minWidth: 0, flex: 1, border: 0 }}>
           <Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'baseline', gap: 1, mb: 0.2 }}>
             <Typography noWrap sx={{ fontWeight: (ct.unread_count ?? 0) > 0 ? 800 : 500, fontSize: 16, color: '#111b21', lineHeight: 1.25 }}>
@@ -609,6 +700,7 @@ const MessageBlock = memo(function MessageBlock({
         <Bubble
           side="left"
           time={fmtTime(m.created_at)}
+          delivery={m.delivery_status}
           name={selectedName || sender}
           replyTo={resolveReply(m.reply_to)}
           onReply={() => onReply(m.wa_msg_id || String(m.id), mediaPreviewLabel(m))}
@@ -810,6 +902,29 @@ const ChatComposer = memo(function ChatComposer({
   const [text, setText] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [sending, setSending] = useState(false);
+  // Pratinjau tautan (pola v4): URL terakhir di teks → kartu preview sebelum kirim.
+  const linkPreview = useLinkPreview(agentId);
+  const [previewData, setPreviewData] = useState<{ title: string; description?: string; image?: string; url: string } | null>(null);
+  const lastUrl = useMemo(() => {
+    const m = text.match(/https?:\/\/[^\s]+/);
+    return m ? m[0] : '';
+  }, [text]);
+  useEffect(() => {
+    if (!lastUrl) {
+      setPreviewData(null);
+      return;
+    }
+    const t = setTimeout(async () => {
+      try {
+        const res = await linkPreview.mutateAsync(lastUrl);
+        setPreviewData(res.data ?? null);
+      } catch {
+        setPreviewData(null);
+      }
+    }, 700);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lastUrl]);
   const fileInput = useRef<HTMLInputElement>(null);
   const typingActive = useRef(false);
   const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -910,6 +1025,24 @@ const ChatComposer = memo(function ChatComposer({
           </Box>
           <IconButton size="small" onClick={onClearReply}>
             <CloseIcon sx={{ fontSize: 18 }} />
+          </IconButton>
+        </Stack>
+      )}
+
+      {previewData && !file && (
+        <Stack direction="row" sx={{ mx: 1.25, mb: 0.5, p: 1, alignItems: 'center', gap: 1, bgcolor: WA.panel, borderRadius: 1 }}>
+          {previewData.image && (
+            <Box component="img" src={previewData.image} alt=""
+              sx={{ width: 44, height: 44, borderRadius: 1, objectFit: 'cover', flexShrink: 0 }} />
+          )}
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Typography noWrap sx={{ fontSize: 13, fontWeight: 600 }}>{previewData.title}</Typography>
+            {previewData.description && (
+              <Typography noWrap sx={{ fontSize: 12, color: WA.meta }}>{previewData.description}</Typography>
+            )}
+          </Box>
+          <IconButton size="small" onClick={() => setPreviewData(null)}>
+            <CloseIcon sx={{ fontSize: 16 }} />
           </IconButton>
         </Stack>
       )}
@@ -1068,6 +1201,37 @@ export default function InboxPanel({
   const [visionError, setVisionError] = useState('');
   const [contactInfoOpen, setContactInfoOpen] = useState(false);
   const [copyHint, setCopyHint] = useState('');
+  const qc = useQueryClient();
+  // Tombol Resync riwayat (deep-sync sederhana)
+  const [resyncMsg, setResyncMsg] = useState('');
+  const resyncMut = useRequestHistoryResync(agentId);
+  const [typingSender, setTypingSender] = useState<string | null>(null);
+  const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Realtime SSE (pola v4): invalidasi daftar & percakapan + suara + indikator mengetik.
+  const handleLiveEvent = useCallback((ev: InboxLiveEvent) => {
+    if (ev.kind === 'typing') {
+      // active=false berarti pelanggan berhenti mengetik → hapus indikator segera.
+      if (ev.active) {
+        setTypingSender(ev.sender ?? null);
+        if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
+        typingTimerRef.current = setTimeout(() => setTypingSender(null), 4000);
+      } else if (typingSender === ev.sender) {
+        setTypingSender(null);
+      }
+      return;
+    }
+    // Hanya pesan MASUK (kind=incoming) yang memicu bunyi; sisanya refresh UI saja.
+    if (ev.kind === 'incoming') {
+      if (ev.sender && ev.sender !== sender) playInboxSound();
+    }
+    // Refresh daftar HANYA untuk event yang mengubah isi chat (bukan state
+    // baca/typing) — mencegah sidebar refetch berat berkali-kali → ngelag.
+    if (ev.kind === 'incoming' || ev.kind === 'message' || ev.kind === 'revoke' || ev.kind === 'history_sync') {
+      void qc.invalidateQueries({ queryKey: ['contacts', agentId] });
+    }
+    void qc.invalidateQueries({ queryKey: ['conversation', agentId, ev.sender ?? sender] });
+  }, [qc, agentId, sender, typingSender]);
+  useInboxRealtime(agentId, handleLiveEvent);
   const bottomRef = useRef<HTMLDivElement>(null);
   const chatRef = useRef<HTMLDivElement>(null);
   const didFirstScroll = useRef(false);
@@ -1104,15 +1268,19 @@ export default function InboxPanel({
   }, [convo]);
 
   const filteredContacts = useMemo(() => {
-    const list = contacts || [];
-    const q = search.trim().toLowerCase();
-    if (!q) return list;
-    return list.filter((c) => {
-      const name = (c.name || '').toLowerCase();
-      const num = c.sender.toLowerCase();
-      const msg = (c.last_msg || '').toLowerCase();
-      return name.includes(q) || num.includes(q) || msg.includes(q);
-    });
+  const list = contacts || [];
+  const q = search.trim().toLowerCase();
+  if (!q) return list;
+  // Pencarian nomor tahan ragam format: '+62...', '08...', '62...' — bandingkan
+  // digit murni sehingga mengetik sebagian nomor pun tetap ketemu.
+  const qDigits = q.replace(/[^0-9]/g, '');
+  return list.filter((c) => {
+  const name = (c.name || '').toLowerCase();
+  const num = c.sender.toLowerCase();
+  const numDigits = c.sender.replace(/[^0-9]/g, '');
+  const msg = (c.last_msg || '').toLowerCase();
+  return name.includes(q) || num.includes(q) || (qDigits.length > 0 && numDigits.includes(qDigits)) || msg.includes(q);
+  });
   }, [contacts, search]);
 
   const replyLookup = useMemo(() => {
@@ -1136,10 +1304,10 @@ export default function InboxPanel({
   const selectedName = selectedContact?.name;
 
   const headerSubtitle = useMemo(() => {
+    if (typingSender === sender) return 'sedang mengetik…';
     if (convoFetching) return 'memperbarui…';
-    if (selectedName) return `+${sender}`;
     return `+${sender}`;
-  }, [convoFetching, selectedName, sender]);
+  }, [convoFetching, selectedName, sender, typingSender]);
 
   const copyNumber = useCallback(async () => {
     if (!sender) return;
@@ -1371,6 +1539,7 @@ export default function InboxPanel({
                   onSelect={selectContact}
                   onDelete={(s) => { void deleteConversation(s); }}
                   deleting={deletingSender === ct.sender}
+                  agentId={agentId}
                 />
               ))
             )}
@@ -1423,7 +1592,7 @@ export default function InboxPanel({
                 <SmartToyIcon sx={{ fontSize: 36, color: WA.greenDark }} />
               </Box>
               <Typography sx={{ fontWeight: 300, fontSize: 28, color: '#41525d', mb: 1 }}>
-                SlaluDiskon Inbox
+                CRM Dashboard Inbox
               </Typography>
               <Typography sx={{ maxWidth: 420, color: WA.meta, fontSize: 14, lineHeight: 1.5 }}>
                 Pilih percakapan di kiri untuk membalas pelanggan. Chat AI, CS, dan pelanggan digabung dalam satu thread.
@@ -1490,10 +1659,29 @@ export default function InboxPanel({
                       {selectedName || `+${sender}`}
                     </Typography>
                     <Typography noWrap sx={{ fontSize: 12.5, color: WA.meta, lineHeight: 1.2 }}>
-                      {headerSubtitle}
+                      {resyncMsg || headerSubtitle}
                     </Typography>
                   </Box>
                 </Box>
+                <Tooltip title="Resync riwayat WhatsApp">
+                  <IconButton
+                    size="small"
+                    aria-label="Resync riwayat"
+                    sx={{ color: WA.meta }}
+                    onClick={async () => {
+                      try {
+                        const res = await resyncMut.mutateAsync();
+                        setResyncMsg(res.message || 'Sinkronisasi selesai');
+                        setTimeout(() => setResyncMsg(''), 6000);
+                      } catch (e) {
+                        setResyncMsg('Gagal sinkronisasi — WA harus terhubung');
+                        setTimeout(() => setResyncMsg(''), 6000);
+                      }
+                    }}
+                  >
+                    <SyncIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
                 <Tooltip title="Info kontak">
                   <IconButton size="small" onClick={() => setContactInfoOpen(true)} aria-label="Info kontak" sx={{ color: WA.meta }}>
                     <InfoOutlinedIcon fontSize="small" />

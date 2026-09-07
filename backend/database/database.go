@@ -5,16 +5,32 @@ import (
 	"log"
 	"os"
 	"time"
+
 	"wa-assistant/backend/config"
 	"wa-assistant/backend/models"
 
-	"golang.org/x/crypto/bcrypt"
 	sqlite "github.com/glebarez/sqlite"
+	"golang.org/x/crypto/bcrypt"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 var DB *gorm.DB
+
+// gormLogger = logger yang TENANG: tidak melog "record not found" (normal),
+// hanya memperingatkan query lambat > 500ms & error nyata. Console tidak lagi
+// penuh spam yang terlihat seperti error.
+func gormLogger() logger.Interface {
+	return logger.New(
+		log.New(os.Stdout, "\r\n", log.LstdFlags),
+		logger.Config{
+			SlowThreshold:             500 * time.Millisecond,
+			LogLevel:                  logger.Warn,
+			IgnoreRecordNotFoundError: true,
+		},
+	)
+}
 
 func Init() {
 	// Coba MySQL dulu, fallback ke SQLite kalau MySQL tidak tersedia
@@ -34,7 +50,7 @@ func Init() {
 		}
 
 		rootDSN := fmt.Sprintf("%s:%s@tcp(%s:%s)/?charset=utf8mb4&parseTime=True&loc=Local", user, pass, host, port)
-		if rootDB, rootErr := gorm.Open(mysql.Open(rootDSN), &gorm.Config{}); rootErr == nil {
+		if rootDB, rootErr := gorm.Open(mysql.Open(rootDSN), &gorm.Config{Logger: gormLogger()}); rootErr == nil {
 			rootDB.Exec("CREATE DATABASE IF NOT EXISTS `" + name + "` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
 			if sqlDB, e := rootDB.DB(); e == nil {
 				sqlDB.Close()
@@ -42,7 +58,7 @@ func Init() {
 		}
 
 		dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=True&loc=Local", user, pass, host, port, name)
-		DB, err = gorm.Open(mysql.Open(dsn), &gorm.Config{})
+		DB, err = gorm.Open(mysql.Open(dsn), &gorm.Config{Logger: gormLogger()})
 		if err == nil {
 			log.Println("Database: MySQL connected")
 			if sqlDB, e := DB.DB(); e == nil {
@@ -59,7 +75,7 @@ func Init() {
 			log.Printf("MySQL unavailable (%v) — fallback ke SQLite", err)
 		}
 		dbPath := config.Env("DB_PATH", "./wa-assistant.db")
-		DB, err = gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
+		DB, err = gorm.Open(sqlite.Open(dbPath), &gorm.Config{Logger: gormLogger()})
 		if err != nil {
 			log.Fatal("Database error (SQLite): ", err)
 		}
@@ -90,12 +106,40 @@ func Init() {
 		&models.ConversationRead{},
 		&models.GroupGuardConfig{}, &models.GroupModerationLog{},
 		&models.MetaConversionEvent{},
+		// v4 additions (ported from chatloop-1.6-1.7)
+		&models.InboxReadState{},
+		&models.UserAgentAssignment{},
+		&models.CSActivityLog{},
+		&models.SenderAlias{},
+		&models.LincahConfig{},
+		&models.LincahOrder{},
+		&models.LincahTenantConfig{},
 	)
 
 	backfillKnowledgeCharCount()
+	backfillInboxLastMsgAt()
+
+	// Index performa (idempoten, SENYAP — cek keberadaan dulu agar console
+	// tidak menampilkan error duplicate): percakapan & sidebar sering di-query
+	// per (agent, sender); tanpa index, buka chat memindai seluruh tabel.
+	ensureIndex := func(name, table, cols string) {
+		if DB.Migrator().HasIndex(table, name) {
+			return
+		}
+		_ = DB.Exec("CREATE INDEX " + name + " ON " + table + " " + cols).Error
+	}
+	ensureIndex("idx_ch_agent_sender", "chat_histories", "(agent_id, sender, id)")
+	ensureIndex("idx_ch_agent_sender_created", "chat_histories", "(agent_id, sender, created_at)")
+	ensureIndex("idx_irs_agent_sender", "inbox_read_states", "(agent_id, sender)")
 	recoverStuckCrawlJobs()
 	seedSuperAdmin()
 	seedDefaultTenant()
+
+	// Identitas pesan kanonik (pola v4): dedup wa_msg_id + unique index.
+	// Aman dijalankan berulang (idempoten).
+	if err := EnsureCanonicalChatMessageIDs(); err != nil {
+		log.Printf("Peringatan canonical message IDs: %v", err)
+	}
 
 	log.Println("Database ready")
 }
@@ -126,6 +170,44 @@ func backfillKnowledgeCharCount() {
 	}
 	if len(rows) > 0 {
 		log.Printf("Backfill char_count untuk %d knowledge lama", len(rows))
+	}
+}
+
+// backfillInboxLastMsgAt mengisi last_msg_at InboxReadState dari chat_histories
+// untuk data yang sudah ada sebelum kolom ini dibuat (v4 upgrade).
+// Idempoten: hanya menyentuh baris yang last_msg_at masih NULL.
+func backfillInboxLastMsgAt() {
+	// Cek dulu apakah tabel inbox_read_states sudah ada data yang perlu di-backfill.
+	var nullCount int64
+	DB.Model(&models.InboxReadState{}).Where("last_msg_at IS NULL").Count(&nullCount)
+	if nullCount == 0 {
+		return
+	}
+
+	// Query: cari pasangan (agent_id, sender) dengan created_at terbaru dari chat_histories.
+	type latestMsg struct {
+		AgentID  uint
+		Sender   string
+		LatestAt time.Time
+	}
+	var rows []latestMsg
+	DB.Raw(`
+		SELECT agent_id, sender, MAX(created_at) as latest_at
+		FROM chat_histories
+		GROUP BY agent_id, sender
+	`).Scan(&rows)
+
+	updated := 0
+	for _, r := range rows {
+		res := DB.Model(&models.InboxReadState{}).
+			Where("agent_id = ? AND sender = ? AND last_msg_at IS NULL", r.AgentID, r.Sender).
+			Update("last_msg_at", r.LatestAt)
+		if res.RowsAffected > 0 {
+			updated++
+		}
+	}
+	if updated > 0 {
+		log.Printf("Backfill last_msg_at: %d inbox read state diperbarui", updated)
 	}
 }
 

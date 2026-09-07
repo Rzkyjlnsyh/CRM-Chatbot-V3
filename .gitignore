@@ -26,3 +26,5 @@ Thumbs.db
 
 # Vite cache
 .vite/
+*.db
+*.db.bak-*

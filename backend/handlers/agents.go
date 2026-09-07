@@ -144,6 +144,19 @@ func OnWAMessage(agentID uint, sender types.JID, in services.IncomingMessage) {
 		log.Printf("Gagal memastikan kontak CRM (agent %d, %s): %v", agentID, num, err)
 	}
 
+	// v4: Majukan last_msg_at dan increment unread count WA agar badge inbox
+	// akurat segera, tanpa menunggu HistorySync. Khusus pesan non-grup.
+	if !sender.IsEmpty() && sender.Server != "g.us" {
+		ts := in.Timestamp
+		if ts.IsZero() {
+			ts = time.Now()
+		}
+		touchInboxLastMsg(agentID, num, ts)
+		if err := recordIncomingWAUnread(agentID, num, ts); err != nil {
+			log.Printf("WARN: recordIncomingWAUnread agent %d %s: %v", agentID, num, err)
+		}
+	}
+
 	// Notifikasi webhook tenant (bila diset) untuk setiap pesan masuk nyata — asinkron,
 	// tidak memblokir alur balasan. Lewati pesan protokol/kosong (bukan teks & bukan media).
 	if in.MediaType != "" || strings.TrimSpace(in.Text) != "" {
@@ -189,18 +202,40 @@ func OnWAOwnMessage(agentID uint, recipient types.JID, in services.IncomingMessa
 	if text == "" {
 		return
 	}
+	// Dedup: pesan manual dengan wa_msg_id yang sudah tercatat TIDAK dicatat dua kali.
+	if in.WAMsgID != "" {
+		var existing models.ChatHistory
+		err := database.DB.Where("agent_id = ? AND wa_msg_id = ?", agentID, in.WAMsgID).First(&existing).Error
+		if err == nil {
+			// Update baris lama (mis. media datang belakangan) — tanpa insert baru.
+			if existing.MediaType == "" && in.MediaType != "" {
+				database.DB.Model(&existing).Updates(map[string]any{
+					"media_type": in.MediaType, "file_name": in.FileName, "mimetype": in.Mimetype,
+				})
+			}
+			return
+		}
+	}
 	// Pasang jeda sementara sebelum menguras pesan customer yang masih di debounce,
 	// sehingga pesan itu tetap tercatat tetapi tidak sempat memicu jawaban AI baru.
 	pauseAIForManualReply(agentID, num)
 	flushText(agentID, recipient, true)
-	now := time.Now()
+	createdAt := time.Now()
+	if !in.Timestamp.IsZero() {
+		createdAt = in.Timestamp // timestamp asli WhatsApp — urutan chat akurat
+	}
 	if err := database.DB.Create(&models.ChatHistory{
 		AgentID: agentID, Sender: num, Reply: text, FromHuman: true,
 		MediaType: in.MediaType, FileName: in.FileName, Mimetype: in.Mimetype,
-		WAMsgID: in.WAMsgID, DeliveryStatus: "sent", CreatedAt: now,
+		WAMsgID: in.WAMsgID, DeliveryStatus: "sent", CreatedAt: createdAt,
 	}).Error; err != nil {
 		log.Printf("Gagal mencatat balasan manual perangkat (agent %d, %s): %v", agentID, num, err)
 	}
+	// Sidebar: pesan KELUAR dari perangkat juga harus menaikkan percakapan ke
+	// atas daftar (pola v4). Tanpa ini, chat dari HP tidak bergeser ke atas
+	// sampai percakapan dibuka.
+	touchInboxLastMsg(agentID, num, createdAt)
+	PublishInboxEvent(agentID, "state", num, in.WAMsgID)
 	// Real-time learning: balasan CS manusia baru = materi belajar terbaru.
 	services.MaybeTriggerIncrementalLearning(agentID)
 }
@@ -302,10 +337,61 @@ func processMessageLocked(agentID uint, sender types.JID, in services.IncomingMe
 	imageAnalysisProductID := uint(0)
 	imageAnalysisNeedsHuman := false
 	// logRow mencatat satu baris percakapan beserta lampiran media (bila ada).
+	// Upgrade v4: pesan customer yang tergabung saat debounce ("a\nb") dipisah
+	// jadi baris tersendiri (dengan wa_msg_id masing-masing) + dedup per wa_msg_id.
+	createIncomingRow := func(text, waID string) (bool, uint) {
+		if waID != "" {
+			var n int64
+			database.DB.Model(&models.ChatHistory{}).
+				Where("agent_id = ? AND wa_msg_id = ?", agentID, waID).
+				Count(&n)
+			if n > 0 {
+				return false, 0 // sudah tercatat (dedup)
+			}
+		}
+		row := models.ChatHistory{
+			AgentID: agentID, Sender: num, Message: text,
+			MediaType: in.MediaType, MediaPath: mediaPath, FileName: in.FileName, Mimetype: in.Mimetype,
+			WAMsgID: waID, ReplyTo: in.ReplyTo, ReplyText: in.ReplyText,
+			DeliveryStatus: "sent", LiveIncoming: true, CreatedAt: messageTime(in.Timestamp),
+		}
+		if err := database.DB.Create(&row).Error; err != nil {
+			log.Printf("Gagal mencatat ChatHistory (agent %d, %s): %v", agentID, num, err)
+			return false, 0
+		}
+		return true, row.ID
+	}
+	triggerAIStage := func(lastChatID uint) {
+		if agent.AIEnabled {
+			services.Go("crm-ai-stage", func() {
+				services.ApplyLabelRules(agentID, num, in.Text)
+				maybeAssessCRMLeadStage(agentID, num, lastChatID)
+			})
+		}
+	}
 	logRow := func(message, reply string, sendErr error) {
 		status, errMsg, nextRetryAt := deliveryFields(sendErr)
 		if strings.TrimSpace(reply) == "" {
 			status, errMsg, nextRetryAt = "sent", "", nil
+			// v4: pisahkan pesan customer yang tergabung (debounce multi-pesan).
+			lines := nonEmptyMessageLines(message)
+			if len(in.WAMsgIDs) > 1 && len(lines) > 1 {
+				created, lastID := 0, uint(0)
+				for i, line := range lines {
+					waID := ""
+					if i < len(in.WAMsgIDs) {
+						waID = strings.TrimSpace(in.WAMsgIDs[i])
+					}
+					if ok, rowID := createIncomingRow(line, waID); ok {
+						created++
+						lastID = rowID
+					}
+				}
+				if created > 0 {
+					triggerAIStage(lastID)
+				}
+				return
+			}
 		}
 		row := models.ChatHistory{
 			AgentID: agentID, Sender: num, Message: message, Reply: reply,
@@ -314,7 +400,8 @@ func processMessageLocked(agentID uint, sender types.JID, in services.IncomingMe
 			ImageAnalysisModel: imageAnalysisModel, ImageAnalysisConfidence: imageAnalysisConfidence,
 			ImageAnalysisAnswer: imageAnalysisAnswer, ImageAnalysisProductID: imageAnalysisProductID,
 			ImageAnalysisNeedsHuman: imageAnalysisNeedsHuman,
-			WAMsgID:                 in.WAMsgID, ReplyTo: in.ReplyTo,
+			WAMsgID:                 in.WAMsgID, ReplyTo: in.ReplyTo, ReplyText: in.ReplyText,
+			LiveIncoming:   strings.TrimSpace(reply) == "",
 			DeliveryStatus: status, SendError: errMsg, NextRetryAt: nextRetryAt,
 		}
 		if err := database.DB.Create(&row).Error; err != nil {
@@ -1009,11 +1096,22 @@ func mediaPlaceholder(mediaType, fileName string) string {
 }
 
 func logTurn(agentID uint, num, msg, reply string, fromHuman bool, replyTo string, replyText string) {
-	if err := database.DB.Create(&models.ChatHistory{
+	row := models.ChatHistory{
 		AgentID: agentID, Sender: num, Message: msg, Reply: reply, FromHuman: fromHuman,
 		ReplyTo: replyTo, ReplyText: replyText,
-	}).Error; err != nil {
+		// Pesan masuk live = bisa dipakai cursor notifikasi (fallback polling).
+		LiveIncoming: !fromHuman && strings.TrimSpace(msg) != "",
+	}
+	if err := database.DB.Create(&row).Error; err != nil {
 		log.Printf("Gagal logTurn (agent %d, %s): %v", agentID, num, err)
+		return
+	}
+	if !fromHuman {
+		// Pesan customer masuk: satu-satunya sinyal yang memicu bunyi di browser.
+		publishIncomingInboxEvent(agentID, num, row.WAMsgID)
+	} else {
+		// Balasan CS/AI: refresh UI saja, tanpa bunyi.
+		publishInboxEvent(agentID, num, "state")
 	}
 }
 
@@ -1148,6 +1246,14 @@ func maybeBuildShippingContext(agent models.Agent, msg string, history []models.
 
 	// Cari kota via Mengantar
 	log.Printf("[shipping] Searching address for: %q", destText)
+	// PRIORITAS: bila AI-ongkir Lincah aktif di agent ini, coba data Lincah
+	// dulu (gudang terdekat + tarif asli). Bila tidak menghasilkan blok,
+	// lanjut ke jalur Mengantar yang sudah ada.
+	if services.LincahAIEnabled(agent.ID) {
+		if block, ok := services.LincahShippingBlock(agent.ID, destText); ok {
+			return block
+		}
+	}
 	addresses, err := services.SearchAddress(destText)
 	if err != nil || len(addresses) == 0 {
 		// Coba dengan prefix "kota" untuk pencarian lebih spesifik
@@ -1386,16 +1492,37 @@ func ResumeHandoff(c *gin.Context) {
 }
 
 // OnDeviceLinked menyimpan device JID & nomor saat agent berhasil login via QR.
+// Bila nomor WA yang terhubung BERBEDA dari sebelumnya → state Inbox akun lama
+// direset otomatis (chat lama tidak bercampur dengan nomor baru).
 func OnDeviceLinked(agentID uint, jid, number string) {
 	var a models.Agent
 	if database.DB.First(&a, agentID).Error != nil {
 		return
 	}
+	currentNumber := normalizedWhatsAppAccount(number)
+	previousNumber := normalizedWhatsAppAccount(a.InboxOwnerNumber)
+	if previousNumber == "" {
+		previousNumber = normalizedWhatsAppAccount(a.Number)
+	}
+	changed := whatsappAccountChanged(previousNumber, currentNumber)
+
 	a.DeviceJID = jid
 	a.Number = number
+	if changed {
+		if resetResult, err := resetAgentInboxData(agentID); err != nil {
+			log.Printf("Gagal membersihkan Inbox agent %d saat berganti nomor %s -> %s: %v", agentID, previousNumber, currentNumber, err)
+		} else {
+			log.Printf("Inbox agent %d direset karena nomor berganti %s -> %s (%d chat, %d media)",
+				agentID, previousNumber, currentNumber, resetResult.DeletedChats, resetResult.DeletedMedia)
+			publishInboxEvent(agentID, "", "reset")
+		}
+	}
 	if err := database.DB.Save(&a).Error; err != nil {
 		log.Printf("Gagal menyimpan device agent %d: %v", agentID, err)
 		return
+	}
+	if changed {
+		_ = database.DB.Model(&a).Update("inbox_owner_number", currentNumber).Error
 	}
 	log.Printf("Agent %d ter-link ke nomor %s", agentID, number)
 }
@@ -2120,7 +2247,7 @@ func buildClosedContactReply(agent models.Agent, sender, msg, closedLabel string
 	greetings := []string{"halo", "hai", "hi", "pagi", "siang", "sore", "malam", "makasih", "terima kasih", "thanks", "ok", "oke", "siap"}
 	for _, g := range greetings {
 		if msg == g || strings.HasPrefix(msg, g) {
-			return "Halo kak! Terima kasih sudah order di slaludiskon.com 😊\n\nKalau ada yang bisa dibantu, boleh ditanyakan ya 🙏"
+			return "Halo kak! Terima kasih sudah order di toko kami 😊\n\nKalau ada yang bisa dibantu, boleh ditanyakan ya 🙏"
 		}
 	}
 

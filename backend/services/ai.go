@@ -49,6 +49,95 @@ type ChatModelInfo struct {
 	} `json:"architecture,omitempty"`
 }
 
+// ActiveChatProvider mengembalikan provider chat aktif: "deepseek-direct"
+// bila user memilih DeepSeek Direct, selain itu "openrouter".
+func ActiveChatProvider() string {
+	pk := database.GetAppSetting("chat_provider", "")
+	if pk == "deepseek-direct" {
+		return "deepseek-direct"
+	}
+	return "openrouter"
+}
+
+// ListDeepSeekChatModels mengambil katalog model dari API DeepSeek
+// (GET /models) — dipakai bila provider aktif = DeepSeek Direct.
+func ListDeepSeekChatModels(ctx context.Context) ([]ChatModelInfo, error) {
+	key := apiKeyFromDB("deepseek_api_key", "DEEPSEEK_API_KEY")
+	if key == "" {
+		return nil, fmt.Errorf("API key DeepSeek belum dikonfigurasi")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, deepseekBase+"/models", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Accept", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("gagal mengambil katalog model DeepSeek: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("DeepSeek mengembalikan status %d (cek API key)", resp.StatusCode)
+	}
+	var payload struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, fmt.Errorf("respons katalog DeepSeek tidak valid: %w", err)
+	}
+	// Konteks default per model DeepSeek yang dikenal (API tidak menyertakannya).
+	ctxLen := func(id string) int {
+		switch {
+		case strings.Contains(id, "reasoner"):
+			return 128000
+		case strings.Contains(id, "vl"):
+			return 32000
+		default:
+			return 64000
+		}
+	}
+	out := make([]ChatModelInfo, 0, len(payload.Data))
+	for _, m := range payload.Data {
+		out = append(out, ChatModelInfo{ID: m.ID, Name: m.ID, ContextLength: ctxLen(m.ID)})
+	}
+	return out, nil
+}
+
+// ListChatModelsForProvider = katalog chat sesuai provider aktif.
+func ListChatModelsForProvider(ctx context.Context) ([]ChatModelInfo, error) {
+	if ActiveChatProvider() == "deepseek-direct" {
+		return ListDeepSeekChatModels(ctx)
+	}
+	return ListOpenRouterChatModels(ctx)
+}
+
+// ListVisionModelsForProvider = katalog model vision sesuai provider aktif.
+func ListVisionModelsForProvider(ctx context.Context) ([]ChatModelInfo, error) {
+	if ActiveChatProvider() == "deepseek-direct" {
+		models, err := ListDeepSeekChatModels(ctx)
+		if err != nil {
+			return nil, err
+		}
+		var vision []ChatModelInfo
+		for _, m := range models {
+			id := strings.ToLower(m.ID)
+			if strings.Contains(id, "vl") || strings.Contains(id, "vision") || strings.Contains(id, "multimodal") {
+				vision = append(vision, m)
+			}
+		}
+		if len(vision) == 0 {
+			return nil, fmt.Errorf("katalog DeepSeek saat ini tidak memuat model vision — aktifkan vision lewat OpenRouter, atau ketik nama model secara manual di pengaturan")
+		}
+		return vision, nil
+	}
+	return ListOpenRouterVisionModels(ctx)
+}
+
 // ListOpenRouterChatModels mengambil katalog model chat terbaru dari OpenRouter.
 func ListOpenRouterChatModels(ctx context.Context) ([]ChatModelInfo, error) {
 	key := apiKeyFromDB("api_key", "OPENROUTER_API_KEY")
@@ -528,6 +617,14 @@ KEBIJAKAN PERCAKAPAN CUSTOMER SERVICE:
 		return ChatResult{Reply: "Maaf kak, boleh diulang pertanyaannya?", Model: p.Short, Trace: trace}, nil
 	}
 	reply = sanitizeCustomerFacingReply(reply)
+	// Fase 4 — policy panjang jawaban per intent (pola v4): balasan melebihi
+	// budget dipadatkan SEKALI (suhu rendah) sebelum grounding.
+	responsePolicy := selectAIResponsePolicy(userMsg, retrievalQuery, productContext, len(relevant))
+	if responseNeedsCondensing(reply, responsePolicy) {
+		if concise, ok := retryConciseReply(p, messages, responsePolicy); ok {
+			reply = concise
+		}
+	}
 
 	// Grounding v2: overlap token + validasi angka (normalized) terhadap knowledge/produk.
 	// Pertanyaan faktual yang gagal → retry ketat sekali → jawaban aman.
@@ -1680,4 +1777,140 @@ func extractONGKIRBlock(systemPrompt string) string {
 	block := systemPrompt[bestStart:]
 	// Potong di akhir baris kosong ganda (batas natural)
 	return strings.TrimSpace(block)
+}
+
+// ---------------------------------------------------------------------------
+// Fungsi AI Baru (v4 — ported dari chatloop-1.6-1.7)
+// ---------------------------------------------------------------------------
+
+// looksLikeVisualRequest mendeteksi apakah pesan customer mengandung permintaan
+// untuk melihat gambar, foto, video, atau konten visual lainnya.
+func looksLikeVisualRequest(msg string) bool {
+	msg = strings.ToLower(msg)
+	visualKeywords := []string{
+		"gambar", "foto", "lihat", "tunjuk", "tampil", "video", "image", "picture",
+		"photo", "show", "display", "visual", "ilustrasi", "screenshot",
+		"contoh gambar", "kirim foto", "kirim gambar",
+	}
+	for _, kw := range visualKeywords {
+		if strings.Contains(msg, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+// knowledgeAlreadySentInHistory memeriksa apakah knowledge (jawaban KB) tertentu
+// sudah pernah dikirim dalam riwayat percakapan. Dipakai untuk menghindari
+// pengulangan informasi yang sama ke customer.
+func knowledgeAlreadySentInHistory(history []models.ChatHistory, knowledgeAnswer string) bool {
+	if knowledgeAnswer == "" {
+		return false
+	}
+	normalized := strings.ToLower(strings.TrimSpace(knowledgeAnswer))
+	snippet := normalized
+	if len(snippet) > 120 {
+		snippet = snippet[:120]
+	}
+	for _, h := range history {
+		if h.Reply == "" {
+			continue
+		}
+		if strings.Contains(strings.ToLower(h.Reply), snippet) {
+			return true
+		}
+	}
+	return false
+}
+
+// productAlreadySentInHistory memeriksa apakah info produk tertentu (berdasarkan
+// nama) sudah pernah dikirim dalam riwayat percakapan.
+func productAlreadySentInHistory(history []models.ChatHistory, productName string) bool {
+	if productName == "" {
+		return false
+	}
+	nameLower := strings.ToLower(strings.TrimSpace(productName))
+	keyword := ""
+	for _, word := range strings.Fields(nameLower) {
+		if len(word) > 3 {
+			keyword = word
+			break
+		}
+	}
+	if keyword == "" {
+		keyword = nameLower
+	}
+	for _, h := range history {
+		if h.Reply == "" {
+			continue
+		}
+		if strings.Contains(strings.ToLower(h.Reply), keyword) {
+			return true
+		}
+	}
+	return false
+}
+
+// isNarrowAttributeQuery mendeteksi apakah pesan customer adalah pertanyaan
+// spesifik tentang satu atribut produk (harga, ukuran, warna, stok, dll).
+func isNarrowAttributeQuery(msg string) bool {
+	msg = strings.ToLower(msg)
+	attributePatterns := []string{
+		"berapa harga", "harganya berapa", "harga ", "price",
+		"ukuran", "size", "dimensi", "panjang", "lebar", "tinggi",
+		"warna", "color", "pilihan warna",
+		"stok", "stock", "tersedia", "ready", "ada gak", "ada tidak",
+		"berat", "weight", "gram", "kg",
+		"material", "bahan",
+		"garansi", "warranty",
+		"ongkir", "ongkos kirim", "biaya kirim",
+	}
+	for _, p := range attributePatterns {
+		if strings.Contains(msg, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// stripMediaDirectives menghapus directive media internal dari reply AI
+// sebelum dikirim ke customer. Directive seperti [SEND_IMAGE:...] dipakai
+// internal untuk menentukan media yang akan dilampirkan, bukan untuk ditampilkan.
+func stripMediaDirectives(reply string) string {
+	directiveRE := regexp.MustCompile(`\[SEND_(?:IMAGE|VIDEO|DOC|DOCUMENT|AUDIO|FILE):[^\]]*\]`)
+	reply = directiveRE.ReplaceAllString(reply, "")
+	knRE := regexp.MustCompile(`\[KNOWLEDGE_IMAGE:[^\]]*\]`)
+	reply = knRE.ReplaceAllString(reply, "")
+	lines := strings.Split(reply, "\n")
+	var cleaned []string
+	for _, l := range lines {
+		if t := strings.TrimSpace(l); t != "" || (len(cleaned) > 0 && cleaned[len(cleaned)-1] != "") {
+			cleaned = append(cleaned, l)
+		}
+	}
+	return strings.TrimSpace(strings.Join(cleaned, "\n"))
+}
+
+// resolveChatAttachment mengekstrak informasi attachment/media dari reply AI
+// untuk dilampirkan ke pesan WhatsApp.
+// Mengembalikan (mediaType, mediaRef, cleanReply).
+// mediaType: "" = tidak ada attachment, "image", "video", "document", "knowledge_image".
+func resolveChatAttachment(reply string) (mediaType, mediaRef, cleanReply string) {
+	imageRE := regexp.MustCompile(`\[SEND_IMAGE:([^\]]+)\]`)
+	if m := imageRE.FindStringSubmatch(reply); len(m) > 1 {
+		return "image", strings.TrimSpace(m[1]), stripMediaDirectives(reply)
+	}
+	knRE := regexp.MustCompile(`\[KNOWLEDGE_IMAGE:([^\]]+)\]`)
+	if m := knRE.FindStringSubmatch(reply); len(m) > 1 {
+		return "knowledge_image", strings.TrimSpace(m[1]), stripMediaDirectives(reply)
+	}
+	videoRE := regexp.MustCompile(`\[SEND_VIDEO:([^\]]+)\]`)
+	if m := videoRE.FindStringSubmatch(reply); len(m) > 1 {
+		return "video", strings.TrimSpace(m[1]), stripMediaDirectives(reply)
+	}
+	docRE := regexp.MustCompile(`\[SEND_(?:DOC|DOCUMENT|FILE):([^\]]+)\]`)
+	if m := docRE.FindStringSubmatch(reply); len(m) > 1 {
+		return "document", strings.TrimSpace(m[1]), stripMediaDirectives(reply)
+	}
+	return "", "", reply
 }

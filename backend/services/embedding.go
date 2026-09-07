@@ -153,6 +153,16 @@ type EmbeddingModelInfo struct {
 	ContextLength int    `json:"context_length,omitempty"`
 }
 
+// ListEmbeddingModelsForProvider = katalog embedding sesuai provider aktif.
+// DeepSeek TIDAK punya API embedding — balas error jelas agar UI menampilkan
+// pesan panduan (pakai OpenRouter untuk embedding).
+func ListEmbeddingModelsForProvider(ctx context.Context) ([]EmbeddingModelInfo, error) {
+	if ActiveChatProvider() == "deepseek-direct" {
+		return nil, fmt.Errorf("DeepSeek tidak menyediakan model embedding — embedding tetap memakai OpenRouter (isi OPENROUTER_API_KEY)")
+	}
+	return ListOpenRouterEmbeddingModels(ctx)
+}
+
 // ListOpenRouterEmbeddingModels mengambil katalog terbaru sehingga pilihan model
 // di dashboard tidak ditanam permanen di kode maupun environment.
 func ListOpenRouterEmbeddingModels(ctx context.Context) ([]EmbeddingModelInfo, error) {

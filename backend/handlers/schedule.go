@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"log"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -193,6 +194,7 @@ func StartScheduler() {
 func StartSchedulerCtx(ctx context.Context) {
 	go func() {
 		safeRun("processDueSchedules", processDueSchedules)
+		safeRun("processDueStatuses", processDueStatuses)
 		go safeRun("processDueFollowUps", processDueFollowUps)
 		t := time.NewTicker(1 * time.Minute)
 		defer t.Stop()
@@ -203,7 +205,7 @@ func StartSchedulerCtx(ctx context.Context) {
 				return
 			case <-t.C:
 				safeRun("processDueSchedules", processDueSchedules)
-				// Follow-up dijalankan terpisah agar tak menahan jadwal.
+				safeRun("processDueStatuses", processDueStatuses)
 				go safeRun("processDueFollowUps", processDueFollowUps)
 			}
 		}
@@ -278,5 +280,47 @@ func fireScheduled(s models.ScheduledMessage) {
 func CleanupStuckSchedules() {
 	if err := database.DB.Model(&models.ScheduledMessage{}).Where("status = ?", "running").Update("status", "interrupted").Error; err != nil {
 		log.Printf("Cleanup stuck schedule gagal: %v", err)
+	}
+}
+
+// processDueStatuses memproses WA Status terjadwal (ScheduledStatus) yang sudah jatuh tempo.
+// Dipanggil oleh StartSchedulerCtx secara periodik.
+// Setiap status yang "scheduled" dan run_at <= now diposting ke WhatsApp.
+func processDueStatuses() {
+	now := time.Now()
+	var dueStatuses []models.ScheduledStatus
+	if err := database.DB.Where("status = ? AND run_at <= ?", "scheduled", now).
+		Limit(20).Find(&dueStatuses).Error; err != nil {
+		log.Printf("[schedule] gagal query due statuses: %v", err)
+		return
+	}
+	for _, s := range dueStatuses {
+		// Tandai sebagai running agar tidak diproses dua kali.
+		if err := database.DB.Model(&s).Update("status", "running").Error; err != nil {
+			log.Printf("[schedule] gagal tandai status %d running: %v", s.ID, err)
+			continue
+		}
+		wa := services.WA(s.AgentID)
+		if !wa.IsConnected() {
+			// Agent tidak terhubung — tunda ke next tick.
+			_ = database.DB.Model(&s).Update("status", "scheduled").Error
+			continue
+		}
+		// Baca media jika ada.
+		var mediaBytes []byte
+		if s.MediaPath != "" {
+			if data, err := os.ReadFile(s.MediaPath); err != nil {
+				log.Printf("[schedule] gagal baca media status %d: %v", s.ID, err)
+			} else {
+				mediaBytes = data
+			}
+		}
+		if err := wa.PostStatus(s.Text, s.Mimetype, mediaBytes); err != nil {
+			log.Printf("[schedule] status %d gagal diposting ke WA: %v", s.ID, err)
+			_ = database.DB.Model(&s).Updates(map[string]any{"status": "failed", "error": err.Error()}).Error
+		} else {
+			_ = database.DB.Model(&s).Updates(map[string]any{"status": "done", "error": ""}).Error
+			log.Printf("[schedule] status %d berhasil diposting (agent %d)", s.ID, s.AgentID)
+		}
 	}
 }

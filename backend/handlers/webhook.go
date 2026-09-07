@@ -136,6 +136,8 @@ type webhookStatusPayload struct {
 
 // OnWAReceipt dipanggil services WA saat ada receipt; kirim webhook "message.status" bila diset.
 func OnWAReceipt(agentID uint, m services.ReceiptMeta) {
+	// Update status kirim di DB (monotonik: sent < delivered < read) SEBELUM webhook.
+	updateChatDeliveryStatus(agentID, m)
 	services.Go("webhook-status", func() {
 		var a models.Agent
 		if database.DB.Select("id", "number", "webhook_url", "webhook_secret").First(&a, agentID).Error != nil || a.WebhookURL == "" {
@@ -155,6 +157,26 @@ func OnWAReceipt(agentID uint, m services.ReceiptMeta) {
 		}
 		postWebhookWithRetry(a.WebhookURL, a.WebhookSecret, body)
 	})
+}
+
+// updateChatDeliveryStatus memperbarui delivery_status baris chat dari receipt WA.
+// Monotonik: sent(1) < delivered(2) < read_inferred(3) < read(4) < played(5) —
+// status hanya naik, tidak pernah mundur (receipt bisa datang tidak berurutan).
+func updateChatDeliveryStatus(agentID uint, m services.ReceiptMeta) {
+	if m.Recipient == "" || len(m.MessageIDs) == 0 {
+		return
+	}
+	rank := map[string]int{"sent": 1, "delivered": 2, "read_inferred": 3, "read": 4, "played": 5}
+	newRank, ok := rank[m.Status]
+	if !ok {
+		return
+	}
+	// Hanya naikkan baris yang statusnya LEBIH RENDAH dari receipt ini.
+	lower := []string{"sent", "delivered", "read_inferred", "read", "played"}[:newRank-1]
+	database.DB.Model(&models.ChatHistory{}).
+		Where("agent_id = ? AND wa_msg_id IN ? AND sender = ?", agentID, m.MessageIDs, m.Recipient).
+		Where("delivery_status IN ?", lower).
+		Update("delivery_status", m.Status)
 }
 
 // postWebhookWithRetry mengirim POST bertanda tangan HMAC-SHA256 (header X-Signature),
@@ -192,7 +214,7 @@ func newSignedWebhookRequest(url, secret string, body io.Reader) (*http.Request,
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "SlaluDiskon-Webhook/1")
+	req.Header.Set("User-Agent", "CRM-Webhook/1")
 	if secret != "" {
 		mac := hmac.New(sha256.New, []byte(secret))
 		mac.Write(payload)

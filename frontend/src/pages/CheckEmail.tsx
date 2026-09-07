@@ -3,7 +3,7 @@ import { Box, Card, CardContent, Typography, Button, Alert, Link } from '@mui/ma
 import { useNavigate, useLocation } from 'react-router-dom';
 import MarkEmailReadOutlinedIcon from '@mui/icons-material/MarkEmailReadOutlined';
 import api from '../services/api';
-import logo from '../assets/logo-slaludiskon-login.png';
+import logo from '../assets/logo-crm-dashboard-login.png';
 
 export default function CheckEmail() {
   const navigate = useNavigate();
@@ -32,7 +32,7 @@ export default function CheckEmail() {
     <Box sx={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: 'background.default', p: 2 }}>
       <Card sx={{ width: '100%', maxWidth: 440 }}>
         <Box sx={{ textAlign: 'center', pt: 3, px: 4 }}>
-          <img src={logo} alt="SlaluDiskon" style={{ width: '50%', maxWidth: 180, height: 'auto', display: 'block', margin: '0 auto' }} />
+          <img src={logo} alt="CRM" style={{ width: '50%', maxWidth: 180, height: 'auto', display: 'block', margin: '0 auto' }} />
         </Box>
         <CardContent sx={{ px: { xs: 3, sm: 4 }, pb: 4, textAlign: 'center' }}>
           <MarkEmailReadOutlinedIcon sx={{ fontSize: 56, color: 'primary.main', mt: 1 }} />

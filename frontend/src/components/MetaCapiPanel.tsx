@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import {
-  Alert, Box, Button, CircularProgress, Paper, Stack,
+  Alert, Autocomplete, Box, Button, CircularProgress, Paper, Stack,
   Table, TableBody, TableCell, TableHead, TableRow, TextField, Typography,
 } from '@mui/material';
 import { useMetaConfig, useSaveMetaConfig, useTestMetaEvent } from '../hooks';
@@ -21,6 +21,9 @@ export default function MetaCapiPanel({ agentId }: { agentId: number }) {
   const [convLabels, setConvLabels] = useState('');
   const [eventName, setEventName] = useState('Purchase');
   const [labelEvents, setLabelEvents] = useState('');
+  const [convValue, setConvValue] = useState('');
+  const [currency, setCurrency] = useState('IDR');
+  const [standardEvents, setStandardEvents] = useState<string[]>([]);
   const [seeded, setSeeded] = useState(false);
 
   if (cfg && !seeded) {
@@ -28,6 +31,9 @@ export default function MetaCapiPanel({ agentId }: { agentId: number }) {
     setTestCode(cfg.test_event_code || '');
     setConvLabels(cfg.conv_labels || '');
     setEventName(cfg.event_name || 'Purchase');
+    setConvValue(cfg.conv_value || '');
+    setCurrency(cfg.currency || 'IDR');
+    setStandardEvents(cfg.standard_events || []);
     const lines = Object.entries(cfg.label_events || {})
       .map(([k, v]) => `${k}=${v}`).join('\n');
     setLabelEvents(lines);
@@ -59,6 +65,8 @@ export default function MetaCapiPanel({ agentId }: { agentId: number }) {
       conv_labels: convLabels,
       event_name: eventName.trim() || 'Purchase',
       label_events: parseLabelEvents(labelEvents),
+      conv_value: convValue.trim(),
+      currency: currency.trim() || 'IDR',
     } as never, {
       onSuccess: () => {
         setAccessToken('');
@@ -97,13 +105,27 @@ export default function MetaCapiPanel({ agentId }: { agentId: number }) {
             <TextField label="Pixel ID (Meta)" value={pixelId} onChange={(e) => setPixelId(e.target.value)} fullWidth />
             <TextField label="Access Token (API Key Meta)" type="password" value={accessToken}
               onChange={(e) => setAccessToken(e.target.value)} fullWidth
-              placeholder={cfg?.configured ? '••• tersimpan — kosongkan untuk pakai yang lama' : ''} />
+              placeholder={cfg?.token_configured ? '••• tersimpan — kosongkan untuk pakai yang lama' : ''} />
             <TextField label="Test Event Code (opsional, mode test)" value={testCode} onChange={(e) => setTestCode(e.target.value)} fullWidth />
             <TextField label="Label Konversi (dipisah koma)" value={convLabels}
               onChange={(e) => setConvLabels(e.target.value)} fullWidth
               helperText="Label WhatsApp yang dianggap konversi, misal: Transfer, Closing" />
-            <TextField label="Event CAPI" value={eventName} onChange={(e) => setEventName(e.target.value)} fullWidth
-              helperText="cth: Purchase, Lead, CompleteRegistration" />
+            <Autocomplete
+              freeSolo
+              size="small"
+              value={eventName}
+              onInputChange={(_, v) => setEventName(v)}
+              options={standardEvents.length ? standardEvents : ['Purchase', 'Lead', 'Contact', 'CompleteRegistration', 'Schedule', 'SubmitApplication']}
+              renderInput={(params) => (
+                <TextField {...params} label="Event CAPI (standar Meta)" fullWidth
+                  helperText="Pilih dari daftar standar atau ketik event khusus" />
+              )}
+            />
+            <TextField label="Nilai konversi tetap (Rp, opsional)" value={convValue}
+              onChange={(e) => setConvValue(e.target.value)} fullWidth
+              helperText="Fallback nilai bila transaksi tidak diketahui dari data order" />
+            <TextField label="Mata uang" value={currency} onChange={(e) => setCurrency(e.target.value)} fullWidth
+              helperText="cth: IDR, USD" />
             <TextField label="Pemetaan per label (label=Event, satu per baris)" value={labelEvents}
               onChange={(e) => setLabelEvents(e.target.value)} fullWidth multiline minRows={2}
               helperText="Opsional. Kosongkan untuk memakai Event CAPI default untuk semua label." />

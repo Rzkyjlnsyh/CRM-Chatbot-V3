@@ -9,6 +9,7 @@ import {
 import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import HistoryIcon from '@mui/icons-material/History';
 import SettingsIcon from '@mui/icons-material/Settings';
+import CopyAllIcon from '@mui/icons-material/CopyAll';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CancelIcon from '@mui/icons-material/Cancel';
@@ -27,6 +28,7 @@ import {
 } from '../hooks';
 import PageHeader from './PageHeader';
 import { swalConfirm, swalToast } from '../services/swal';
+import api from '../services/api';
 import { apiErrorMessage } from '../services/errors';
 import type { LearningPattern } from '../types';
 
@@ -104,8 +106,30 @@ function PatternCard({ pattern, onApply, onReject, loading }: {
   );
 }
 
+// formatLastRunAt: "28/08/2026 17:43 · 2 jam lalu" — jam penting karena
+// learning realtime berjalan berkali-kali sehari; bukti "masih nyala"
+// terlihat langsung di kartu status, tanpa buka log.
+function formatLastRunAt(iso?: string | null): string {
+  if (!iso) return 'Belum pernah';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return 'Belum pernah';
+  const local = d.toLocaleString('id-ID', {
+    day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit',
+  });
+  const diffMin = Math.floor((Date.now() - d.getTime()) / 60000);
+  let rel: string;
+  if (diffMin < 1) rel = 'baru saja';
+  else if (diffMin < 60) rel = `${diffMin} menit lalu`;
+  else if (diffMin < 60 * 24) rel = `${Math.floor(diffMin / 60)} jam lalu`;
+  else rel = `${Math.floor(diffMin / 1440)} hari lalu`;
+  return `${local} · ${rel}`;
+}
+
 export default function LearningPanel({ agentId }: { agentId: number }) {
   const [tab, setTab] = useState(0);
+  // Pagination pola: halaman bertambah, angka total TETAP utuh (dari server).
+  const PATTERNS_PER_PAGE = 50;
+  const [patternsPage, setPatternsPage] = useState(1);
   const isoDate = (d: Date) => {
     const y = d.getFullYear();
     const m = String(d.getMonth() + 1).padStart(2, '0');
@@ -124,7 +148,11 @@ export default function LearningPanel({ agentId }: { agentId: number }) {
 
   const { data: status, isLoading } = useLearningStatus(agentId);
   const { data: score } = useLearningScore(agentId);
-  const { data: patterns } = useLearningPatterns(agentId, 'suggested');
+  const { data: patternPage } = useLearningPatterns(agentId, 'suggested', patternsPage, PATTERNS_PER_PAGE);
+  const patterns = patternPage?.patterns;
+  const totalPatterns = patternPage?.total ?? 0;
+  const patternsTotal = status?.patterns_suggested ?? totalPatterns;
+  const patternsHasMore = patternPage ? patternsPage * PATTERNS_PER_PAGE < patternPage.total : false;
   const { data: snapshots } = useLearningSnapshots(agentId);
   const { data: config } = useLearningConfig(agentId);
   const waSync = useLabels(agentId);
@@ -241,7 +269,7 @@ export default function LearningPanel({ agentId }: { agentId: number }) {
               <Box>
                 <Typography variant="caption" color="text.secondary">Learning terakhir</Typography>
                 <Typography variant="body2" sx={{ fontWeight: 700 }}>
-                  {status?.last_run ? new Date(status.last_run.created_at).toLocaleDateString('id-ID') : 'Belum pernah'}
+                  {status?.last_run ? formatLastRunAt(status.last_run.completed_at ?? status.last_run.created_at) : 'Belum pernah'}
                 </Typography>
               </Box>
             </Stack>
@@ -324,7 +352,7 @@ export default function LearningPanel({ agentId }: { agentId: number }) {
 
       <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2 }}>
         <Tab icon={<AutoFixHighIcon />} iconPosition="start" label="Jalankan" />
-        <Tab icon={<LightbulbIcon />} iconPosition="start" label={`Pola (${patterns?.length || 0})`} />
+        <Tab icon={<LightbulbIcon />} iconPosition="start" label={`Pola (${patternsTotal})`} />
         <Tab icon={<HistoryIcon />} iconPosition="start" label={`Versi (${snapshots?.length || 0})`} />
         <Tab icon={<SettingsIcon />} iconPosition="start" label="Konfigurasi" />
       </Tabs>
@@ -377,7 +405,10 @@ export default function LearningPanel({ agentId }: { agentId: number }) {
         <Stack spacing={2}>
           {patterns && patterns.length > 0 && (
             <Stack direction="row" spacing={1} sx={{ alignItems: 'center', justifyContent: 'space-between' }}>
-              <Typography variant="body2" color="text.secondary">{patterns.length} pola menunggu review</Typography>
+              <Typography variant="body2" color="text.secondary">
+                {patternsTotal} pola menunggu review
+                {patternsHasMore && ` · menampilkan ${Math.min(patternsPage * PATTERNS_PER_PAGE, patternsTotal)}`}
+              </Typography>
               <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
                 <Typography variant="caption">Min confidence:</Typography>
                 <Select size="small" value={applyMinConf} onChange={(e) => setApplyMinConf(e.target.value as number)}
@@ -399,12 +430,20 @@ export default function LearningPanel({ agentId }: { agentId: number }) {
               <Typography variant="body2" color="text.disabled">Jalankan learning dulu dari tab "Jalankan".</Typography>
             </Paper>
           ) : (
-            patterns.map(p => (
-              <PatternCard key={p.id} pattern={p}
-                onApply={() => handleApply(p.id)}
-                onReject={() => handleReject(p.id)}
-                loading={busy} />
-            ))
+            <Stack spacing={2}>
+              {patterns.map(p => (
+                <PatternCard key={p.id} pattern={p}
+                  onApply={() => handleApply(p.id)}
+                  onReject={() => handleReject(p.id)}
+                  loading={busy} />
+              ))}
+              {patternsHasMore && (
+                <Button variant="outlined" fullWidth startIcon={busy ? <CircularProgress size={16} /> : null}
+                  onClick={() => setPatternsPage(p => p + 1)} disabled={busy}>
+                  Muat Lebih (sisa {patternsTotal - patternsPage * PATTERNS_PER_PAGE} pola)
+                </Button>
+              )}
+            </Stack>
           )}
         </Stack>
       )}
@@ -543,6 +582,38 @@ export default function LearningPanel({ agentId }: { agentId: number }) {
                   </Stack>
                 </Box>
               )}
+            </Stack>
+            <Divider sx={{ my: 2 }} />
+            <Typography variant="subtitle2" sx={{ fontWeight: 800, mb: 1 }}>🌐 Semua Nomor WA Sekaligus</Typography>
+            <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}>
+              <Button size="small" variant="outlined" startIcon={<CopyAllIcon />}
+                onClick={() => swalConfirm(
+                  'Terapkan profil ini ke SEMUA nomor WA?',
+                  'Persona, knowledge, dan konfigurasi learning agent ini akan disalin ke semua agent lain di akun ini.',
+                ).then((ok) => {
+                  if (!ok) return;
+                  api.post(`/agents/${agentId}/learning/clone-profile-to-all`).then((r) => {
+                    swalToast(r.data?.message || `Disalin ke ${r.data?.copied ?? 0} agent`);
+                  }).catch((e) => swalToast(apiErrorMessage(e, 'Gagal menyalin profil'), 'error'));
+                })}>
+                Salin Profil Ini ke Semua Agent
+              </Button>
+              <Button size="small" variant="contained" startIcon={<PlayArrowIcon />}
+                onClick={() => swalConfirm(
+                  'Aktifkan AI Learning untuk SEMUA nomor WA?',
+                  config?.auto_apply
+                    ? 'Learning + jadwal otomatis + auto-apply akan diaktifkan untuk semua agent di akun ini.'
+                    : 'Learning + jadwal otomatis diaktifkan untuk semua agent (tanpa auto-apply).',
+                ).then((ok) => {
+                  if (!ok) return;
+                  api.post(`/agents/${agentId}/learning/enable-all`, {
+                    auto_apply: !!config?.auto_apply,
+                    schedule_enabled: true,
+                  }).then((r) => swalToast(r.data?.message || `Aktif untuk ${r.data?.enabled ?? 0} agent`))
+                    .catch((e) => swalToast(apiErrorMessage(e, 'Gagal mengaktifkan massal'), 'error'));
+                })}>
+                Aktifkan Learning Semua Agent
+              </Button>
             </Stack>
           </Paper>
         </Stack>

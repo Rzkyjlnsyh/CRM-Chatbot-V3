@@ -1,9 +1,12 @@
 package handlers
 
-// Tes fitur inbox baru: unread, mark-read, label per percakapan, filter label.
+// Tes fitur inbox: unread, mark-read, label per percakapan, filter label.
+// (Diupdate untuk mekanisme v4: unread = InboxReadState.whats_app_unread_count
+// yang disinkronkan dari WA; ConversationRead tetap di-update untuk kompat.)
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,22 +16,24 @@ import (
 	"wa-assistant/backend/database"
 	"wa-assistant/backend/models"
 
-	sqlite "github.com/glebarez/sqlite"
 	"github.com/gin-gonic/gin"
+	sqlite "github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )
 
 func setupInboxLabelTest(t *testing.T) *gorm.DB {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	db, err := gorm.Open(sqlite.Open("file:inbox-label-test?mode=memory&cache=shared"), &gorm.Config{})
+	// DB unik per test — hindari tabrakan seed di DB :memory: cache=shared.
+	dbName := fmt.Sprintf("file:inbox-label-%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "-"))
+	db, err := gorm.Open(sqlite.Open(dbName), &gorm.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := db.AutoMigrate(
 		&models.ChatHistory{}, &models.Contact{}, &models.Handoff{},
 		&models.Label{}, &models.ChatLabel{}, &models.ConversationRead{},
-		&models.Agent{},
+		&models.InboxReadState{}, &models.Agent{},
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +41,7 @@ func setupInboxLabelTest(t *testing.T) *gorm.DB {
 	database.DB = db
 	t.Cleanup(func() { database.DB = old })
 
-	// Data: 2 kontak. Kontak A berlabel "Lunas", kontak B tanpa label.
+	// Data: 2 kontak. Kontak A berlabel "Lunas" + unread WA 2, kontak B tanpa label.
 	now := time.Now()
 	db.Create(&models.Agent{ID: 1, TenantID: 1, Name: "Tes", Number: "628000"})
 	db.Create(&models.Label{LabelID: "l1", Name: "Lunas", AgentID: 1, Color: 5})
@@ -44,6 +49,11 @@ func setupInboxLabelTest(t *testing.T) *gorm.DB {
 	db.Create(&models.ChatHistory{AgentID: 1, Sender: "628111", Message: "hai", FromHuman: false, CreatedAt: now})
 	db.Create(&models.ChatHistory{AgentID: 1, Sender: "628111", Message: "pesan kedua", FromHuman: false, CreatedAt: now.Add(time.Second)})
 	db.Create(&models.ChatHistory{AgentID: 1, Sender: "628222", Message: "tes", FromHuman: false, CreatedAt: now})
+	// InboxReadState (mekanisme unread v4): A unread 2, B unread 0.
+	lastA := now.Add(time.Second)
+	lastB := now
+	db.Create(&models.InboxReadState{AgentID: 1, Sender: "628111", WhatsAppUnreadCount: 2, LastMsgAt: &lastA})
+	db.Create(&models.InboxReadState{AgentID: 1, Sender: "628222", WhatsAppUnreadCount: 0, LastMsgAt: &lastB})
 	return db
 }
 
@@ -69,8 +79,8 @@ func TestInboxShowsLabelsAndUnread(t *testing.T) {
 	}
 	var resp struct {
 		Data []struct {
-			Sender      string `json:"sender"`
-			Labels      []struct {
+			Sender string `json:"sender"`
+			Labels []struct {
 				Name string `json:"name"`
 			} `json:"labels"`
 			UnreadCount int `json:"unread_count"`
@@ -92,6 +102,9 @@ func TestInboxShowsLabelsAndUnread(t *testing.T) {
 			b = true
 			if len(r.Labels) != 0 {
 				t.Fatalf("kontak B tak seharusnya berlabel: %+v", r.Labels)
+			}
+			if r.UnreadCount != 0 {
+				t.Fatalf("unread B = %d, mau 0", r.UnreadCount)
 			}
 		}
 	}
@@ -137,9 +150,9 @@ func TestMarkConversationReadClearsUnread(t *testing.T) {
 		} `json:"data"`
 	}
 	_ = json.Unmarshal(w2.Body.Bytes(), &resp)
-	for _, r := range resp.Data {
-		if r.Sender == "628111" && r.UnreadCount != 0 {
-			t.Fatalf("unread A setelah dibaca = %d, mau 0", r.UnreadCount)
+	for _, row := range resp.Data {
+		if row.Sender == "628111" && row.UnreadCount != 0 {
+			t.Fatalf("unread A setelah mark-read = %d, mau 0", row.UnreadCount)
 		}
 	}
 }

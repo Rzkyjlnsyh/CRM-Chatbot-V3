@@ -6,6 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"wa-assistant/backend/database"
+	"wa-assistant/backend/models"
 )
 
 // StartMediaCleanup menghapus file media lama secara berkala agar disk VPS tidak penuh.
@@ -21,6 +24,16 @@ func StartMediaCleanup(retentionDays int) {
 			run()
 		}
 	}()
+}
+
+// CleanupBroadcastJunk menghapus thread sistem (@broadcast/@newsletter) yang bocor ke
+// chat_histories — dipanggil sekali saat startup (pola v4; diport ke fork klien).
+func CleanupBroadcastJunk() {
+	affected := database.DB.Where("sender LIKE ? OR sender LIKE ?", "%@broadcast", "%@newsletter").
+		Delete(&models.ChatHistory{}).RowsAffected
+	if affected > 0 {
+		log.Printf("[cleanup] %d baris thread broadcast/newsletter dihapus", affected)
+	}
 }
 
 func cleanupMedia(days int) {

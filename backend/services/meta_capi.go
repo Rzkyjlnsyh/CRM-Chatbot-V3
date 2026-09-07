@@ -467,6 +467,57 @@ func TestMetaCAPI(ctx context.Context, userData MetaUserDataInput) (string, erro
 	return sendMetaConversionEvent(ctx, cfg, event)
 }
 
+// MetaStandardEvents = daftar event standar Meta (untuk dropdown skema pelabelan).
+func MetaStandardEvents() []string {
+	return []string{
+		"Purchase", "Lead", "Contact", "CompleteRegistration",
+		"SubmitApplication", "Schedule", "Subscribe", "StartTrial",
+		"InitiateCheckout", "AddToCart", "AddToWishlist", "ViewContent", "Search",
+	}
+}
+
+// extractAmountFromJSON sudah ada di meta.go — tidak diduplikasi di sini.
+
+// FireClosingMetaConversion = konversi dari jalur pipeline closing (tanpa label).
+// Dedup ketat: satu event per (agent, sender) — EventID outbox "closing:...".
+func FireClosingMetaConversion(agentID uint, sender string) {
+	if sender == "" {
+		return
+	}
+	cfg, err := GetMetaTrackingConfig()
+	if err != nil || !cfg.Enabled || cfg.PixelID == "" || cfg.AccessToken == "" {
+		return
+	}
+	eventName := database.GetAppSetting(metaEventNameKey, "Purchase")
+	eventID := fmt.Sprintf("closing:%d:%s", agentID, metaHash(sender))
+	value := metaPurchaseValue(agentID, sender)
+	custom := map[string]any{"currency": metaCurrency()}
+	if value > 0 {
+		custom["value"] = value
+	} else if cv := metaConvValue(); cv > 0 {
+		custom["value"] = cv
+	}
+	_ = EnqueueMetaEvent(MetaEventInput{
+		EventID:    eventID,
+		EventName:  eventName,
+		EventTime:  time.Now(),
+		SourceURL:  "closing-pipeline",
+		UserData:   MetaUserDataInput{Phone: sender},
+		CustomData: custom,
+	})
+}
+
+// MetaConversions = log event CAPI terbaru (untuk panel).
+func MetaConversions(agentID uint, limit int) []models.MetaConversionEvent {
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	var out []models.MetaConversionEvent
+	database.DB.Where("event_name <> ''").Order("id desc").Limit(limit).Find(&out)
+	_ = agentID
+	return out
+}
+
 func GetMetaTrackingStats() MetaTrackingStats {
 	var stats MetaTrackingStats
 	database.DB.Model(&models.MetaConversionEvent{}).Where("status IN ?", []string{"pending", "sending"}).Count(&stats.Pending)

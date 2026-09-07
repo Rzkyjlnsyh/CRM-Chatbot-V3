@@ -75,7 +75,7 @@ func ForgotPassword(c *gin.Context) {
 	resetURL := config.Env("APP_URL", "http://localhost:8080") + "/reset-password?token=" + tokenStr
 	resetHTML := `<div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px"><h2 style="color:#16a34a">Reset Password</h2><p>Klik tombol di bawah untuk mengatur ulang password kamu:</p><a href="` + resetURL + `" style="display:inline-block;padding:12px 24px;background:#16a34a;color:#fff;border-radius:8px;text-decoration:none;font-weight:600">Reset Password</a><p style="color:#6b7280;font-size:14px;margin-top:16px">Tautan berlaku 1 jam. Kalau kamu tidak meminta reset ini, abaikan saja.</p></div>`
 	services.Go("SendEmail:reset", func() {
-		if err := services.SendEmail(user.Email, "Reset Password SlaluDiskon", resetHTML); err != nil {
+		if err := services.SendEmail(user.Email, "Reset Password CRM Dashboard", resetHTML); err != nil {
 			log.Printf("Gagal kirim email reset ke %s: %v", user.Email, err)
 		}
 	})
@@ -130,11 +130,11 @@ func sendVerifyEmail(user models.User) {
 	if user.EmailVerifyToken == "" || user.Email == "" {
 		return
 	}
-	verifyURL := config.Env("APP_URL", "https://slaludiskon.com") + "/api/verify-email?token=" + user.EmailVerifyToken
+	verifyURL := config.Env("APP_URL", "http://localhost:3030") + "/api/verify-email?token=" + user.EmailVerifyToken
 	go func() {
 		defer services.RecoverGo("SendEmail:verify")
-		if err := services.SendEmail(user.Email, "Verifikasi Email SlaluDiskon",
-			`<div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px"><h2 style="color:#16a34a">Verifikasi Email</h2><p>Terima kasih sudah mendaftar di SlaluDiskon! Klik tombol di bawah untuk mengaktifkan akun kamu:</p><a href="`+verifyURL+`" style="display:inline-block;padding:12px 24px;background:#16a34a;color:#fff;border-radius:8px;text-decoration:none;font-weight:600">Verifikasi Email</a><p style="color:#6b7280;font-size:14px;margin-top:16px">Kalau kamu tidak mendaftar, abaikan email ini.</p></div>`); err != nil {
+		if err := services.SendEmail(user.Email, "Verifikasi Email CRM Dashboard",
+			`<div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px"><h2 style="color:#16a34a">Verifikasi Email</h2><p>Terima kasih sudah mendaftar di CRM Dashboard! Klik tombol di bawah untuk mengaktifkan akun kamu:</p><a href="`+verifyURL+`" style="display:inline-block;padding:12px 24px;background:#16a34a;color:#fff;border-radius:8px;text-decoration:none;font-weight:600">Verifikasi Email</a><p style="color:#6b7280;font-size:14px;margin-top:16px">Kalau kamu tidak mendaftar, abaikan email ini.</p></div>`); err != nil {
 			log.Printf("Gagal kirim email verifikasi ke %s: %v", user.Email, err)
 		}
 	}()

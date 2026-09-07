@@ -1,5 +1,5 @@
-// SlaluDiskon — WhatsApp AI & Blast.
-// © 2026 slaludiskon.com. All rights reserved.
+// CRM Dashboard — backend.
+// Internal service.
 
 package main
 
@@ -33,10 +33,10 @@ func main() {
 	database.Init()
 	handlers.ConsolidateAllKnowledge()
 
-	// Verifikasi lisensi saat startup.
-	if !license.Verify() {
-		ui.LicenseError(license.VerifyMessage)
-	}
+	// Verifikasi lisensi saat startup (senyap: tanpa key, server tetap jalan;
+	// dengan key yang tidak valid, hanya dicatat — tidak menghentikan layanan
+	// dan tidak menampilkan apa pun ke pengguna).
+	license.Verify()
 	appCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	// A terminal license decision or expired offline grace triggers the same
@@ -60,6 +60,13 @@ func main() {
 
 	// Sambungkan ulang semua agent yang sudah ter-link.
 	services.Go("StartAgents", handlers.StartAgents)
+	handlers.CleanupBroadcastJunk()     // hapus thread sistem @broadcast/@newsletter yang bocor
+	handlers.CleanupOrphanAssignments() // hapus relasi CS-agent yang sudah tidak valid
+	services.SetHistorySyncHandler(handlers.OnWAHistorySync)
+	services.SetHistoryChatStateHandler(handlers.OnWAHistoryChatState)
+	services.SetWhatsAppReadStateHandler(handlers.OnWAWhatsAppReadState)
+	services.SetMessageRevokeHandler(handlers.OnWAMessageRevoke)
+	services.SetChatPresenceHandler(handlers.OnWAChatPresence)
 	services.StartReconnectWatchdogCtx(appCtx, 90*time.Second)
 
 	// Lanjutkan broadcast yang sempat terhenti saat server mati; tandai jadwal yang nyangkut.
@@ -97,6 +104,7 @@ func main() {
 		api.GET("/agents/:id/media/:cid", handlers.ServeMedia)
 		api.GET("/agents/:id/products/:pid/image", handlers.ServeProductImage)
 		api.GET("/agents/:id/media-assets/:assetId/file", handlers.ServeMediaAssetFile)
+		api.GET("/agents/:id/profile-picture", handlers.ServeProfilePicture)
 		api.GET("/me", handlers.AuthMiddleware(), handlers.Me)
 		api.PUT("/profile", handlers.AuthMiddleware(), handlers.UpdateProfile)
 		api.PUT("/change-password", handlers.AuthMiddleware(), handlers.ChangePassword)
@@ -136,8 +144,11 @@ func main() {
 		// Shipping public (search address tidak perlu auth)
 		api.GET("/shipping/search-address", handlers.SearchMengantarAddress)
 		api.GET("/shipping/addresses", handlers.AuthMiddleware(), handlers.GetMengantarAddresses)
+		// Lincah webhook — DIPANGGIL OLEH LINCAH (incoming), publik.
+		api.POST("/lincah/webhook", handlers.LincahWebhook)
 
 		auth := api.Group("", handlers.AuthMiddleware())
+		auth.Use(handlers.CSRouteGuard()) // CS-only hanya bisa akses agent yang di-assign
 		{
 			// Endpoint lama (back-compat) -> beroperasi pada agent default (id 1).
 			auth.GET("/wa/status", handlers.GetNumberStatus)
@@ -154,6 +165,7 @@ func main() {
 			auth.POST("/knowledge/import", handlers.ImportKnowledge)
 			auth.PUT("/knowledge/:kid", handlers.UpdateKnowledge)
 			auth.DELETE("/knowledge/:kid", handlers.DeleteKnowledge)
+			auth.GET("/knowledge/:kid/image", handlers.ServeKnowledgeImage)
 
 			// Multi-agent (CS).
 			auth.GET("/agents", handlers.ListAgents)
@@ -184,6 +196,8 @@ func main() {
 			auth.POST("/agents/:id/crm/pipeline/rules/test", handlers.TestLabelRules)
 			// AI Learning Engine (belajar dari CS manusia + real-time)
 			auth.POST("/agents/:id/learning/run", handlers.StartLearning)
+			auth.POST("/agents/:id/learning/clone-profile-to-all", handlers.CloneLearningProfileToAll)
+			auth.POST("/agents/:id/learning/enable-all", handlers.EnableLearningForAll)
 			auth.GET("/agents/:id/learning/status", handlers.GetLearningStatus)
 			auth.GET("/agents/:id/learning/score", handlers.GetLearningScore)
 			auth.GET("/agents/:id/learning/runs", handlers.GetLearningRuns)
@@ -248,6 +262,7 @@ func main() {
 			auth.POST("/agents/:id/templates", handlers.CreateTemplate)
 			auth.PUT("/agents/:id/templates/:tid", handlers.UpdateTemplate)
 			auth.DELETE("/agents/:id/templates/:tid", handlers.DeleteTemplate)
+			auth.GET("/agents/:id/templates/:tid/media", handlers.ServeTemplateMedia)
 			auth.GET("/agents/:id/crm/contacts", handlers.ListSavedContacts)
 			auth.POST("/agents/:id/crm/contacts", handlers.CreateSavedContact)
 			auth.PUT("/agents/:id/crm/contacts/:cid", handlers.UpdateSavedContact)
@@ -306,6 +321,22 @@ func main() {
 			auth.GET("/agents/:id/shipping/estimate", handlers.CheckShipping)
 			auth.GET("/agents/:id/shipping/orders", handlers.GetShippingOrders)
 			auth.GET("/agents/:id/shipping/orders/:orderId", handlers.GetShippingOrderDetail)
+			// Lincah — integrasi pengiriman (gudang, ongkir, resi, lacak).
+			auth.GET("/agents/:id/lincah/config", handlers.GetLincahConfig)
+			auth.PUT("/agents/:id/lincah/config", handlers.SaveLincahConfig)
+			auth.POST("/agents/:id/lincah/test", handlers.TestLincahConnection)
+			auth.GET("/agents/:id/lincah/addresses", handlers.LincahListAddresses)
+			auth.GET("/agents/:id/lincah/couriers", handlers.LincahListCouriers)
+			auth.POST("/agents/:id/lincah/ongkir", handlers.LincahCheckOngkir)
+			auth.GET("/agents/:id/lincah/district/search", handlers.LincahSearchDistrictHandler)
+			auth.POST("/agents/:id/lincah/orders", handlers.LincahCreateOrder)
+			auth.GET("/agents/:id/lincah/orders", handlers.LincahListLocalOrders)
+			auth.GET("/agents/:id/lincah/orders/:id", handlers.LincahOrderDetail)
+			auth.GET("/agents/:id/lincah/orders/:id/track", handlers.LincahOrderTrack)
+			auth.POST("/agents/:id/lincah/orders/:id/cancel", handlers.LincahOrderCancel)
+			auth.GET("/agents/:id/lincah/orders/:id/pdf", handlers.LincahOrderPrint)
+			auth.GET("/agents/:id/lincah/districts/search", handlers.LincahSearchDistricts)
+			auth.POST("/agents/:id/lincah/chat-quote", handlers.LincahChatQuote)
 			auth.POST("/agents/:id/shipping/orders", handlers.CreateShippingOrder)
 			auth.POST("/agents/:id/shipping/sync-tracking", handlers.SyncShippingTracking)
 
@@ -313,6 +344,23 @@ func main() {
 			auth.GET("/agents/:id/media-assets", handlers.ListMediaAssets)
 			auth.POST("/agents/:id/media-assets", handlers.UploadMediaAsset)
 			auth.DELETE("/agents/:id/media-assets/:assetId", handlers.DeleteMediaAsset)
+			auth.GET("/agents/:id/history-media/:cid", handlers.GetHistoryMedia)
+			// --- Team CS Management (admin-only) ---
+			auth.GET("/team/users", handlers.RequireTenantAdmin(), handlers.ListTeamUsers)
+			auth.POST("/team/users", handlers.RequireTenantAdmin(), handlers.CreateTeamUser)
+			auth.PUT("/team/users/:uid", handlers.RequireTenantAdmin(), handlers.UpdateTeamUser)
+			auth.DELETE("/team/users/:uid", handlers.RequireTenantAdmin(), handlers.DeleteTeamUser)
+			auth.GET("/team/activity", handlers.RequireTenantAdmin(), handlers.ListCSActivity)
+
+			auth.GET("/agents/:id/history-sync/status", handlers.GetHistorySyncStatus)
+			auth.POST("/agents/:id/history-sync", handlers.RequestHistorySync)
+			auth.POST("/agents/:id/history-sync/resync", handlers.RequestHistoryResync)
+			auth.GET("/agents/:id/inbox/events", handlers.InboxEvents)
+			auth.POST("/agents/:id/inbox/reset", handlers.RequireTenantAdmin(), handlers.ResetAgentInbox)
+			auth.GET("/agents/:id/inbox/unread-summary", handlers.InboxUnreadSummary)
+			auth.GET("/agents/:id/link-preview", handlers.LinkPreview)
+			auth.POST("/agents/:id/inbox/client-debug", handlers.InboxClientDebug)
+			auth.GET("/agents/:id/inbox/client-debug", handlers.InboxClientDebugDump)
 		}
 	}
 

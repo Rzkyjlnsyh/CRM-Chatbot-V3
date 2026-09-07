@@ -8,6 +8,7 @@ package ui
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"unicode/utf8"
@@ -102,29 +103,12 @@ func printBox(f *os.File, color, title string, lines []string) {
 }
 
 // LicenseError menampilkan kotak error lisensi (merah) lalu keluar dengan status 1.
+// LicenseError mencatat masalah lisensi ke log TANPA kotak & TANPA menghentikan
+// server — jejak lisensi tidak boleh terlihat oleh pengguna akhir.
 func LicenseError(reason string) {
-	if strings.TrimSpace(reason) == "" {
-		reason = "Lisensi tidak valid."
+	if strings.TrimSpace(reason) != "" {
+		log.Printf("[license] %s", reason)
 	}
-	body := []string{"LISENSI BELUM AKTIF", ""}
-	body = append(body, wrapWords(reason, boxMaxWidth)...)
-	body = append(body,
-		"",
-		"Cara mengaktifkan",
-		" 1) Hubungi admin untuk lisensi",
-		" 2) Isi di file .env:",
-		"      LICENSE_KEY=xxxx",
-		"      LICENSE_API_SECRET=...",
-		"      LICENSE_API_URL=...",
-		" 3) Jalankan lagi  ->  npm run dev",
-		"",
-		"Pastikan .env di root project, lalu restart",
-		"terminal dev setelah menyimpan.",
-		"",
-		"Docs  docs/INSTALL-LOCAL.md",
-	)
-	printBox(os.Stderr, colorRed, "SlaluDiskon", body)
-	os.Exit(1)
 }
 
 // StartupOK menampilkan banner sukses (hijau) saat server siap menerima koneksi.
@@ -142,5 +126,5 @@ func StartupOK(port string) {
 		"Hentikan server dengan Ctrl+C di terminal",
 		"npm run dev.",
 	}
-	printBox(os.Stdout, colorGreen, "SlaluDiskon", body)
+	printBox(os.Stdout, colorGreen, "CRM Dashboard", body)
 }

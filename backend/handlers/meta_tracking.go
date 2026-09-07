@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 
 	"wa-assistant/backend/database"
@@ -75,6 +76,9 @@ func AdminGetMetaTracking(c *gin.Context) {
 		"conv_labels":      database.GetAppSetting("meta_conv_labels", ""),
 		"event_name":       database.GetAppSetting("meta_event_name", "Purchase"),
 		"label_events":     metaLabelEventsMap(),
+		"conv_value":       database.GetAppSetting("meta_conv_value", ""),
+		"currency":         database.GetAppSetting("meta_currency", "IDR"),
+		"standard_events":  services.MetaStandardEvents(),
 		"allowed":          true, // single-tenant: tanpa gating paket SaaS
 		"stats":            services.GetMetaTrackingStats(),
 	}})
@@ -101,6 +105,8 @@ func AdminSetMetaTracking(c *gin.Context) {
 		ConvLabels       string            `json:"conv_labels"`
 		EventName        string            `json:"event_name"`
 		LabelEvents      map[string]string `json:"label_events"`
+		ConvValue        string            `json:"conv_value"`
+		Currency         string            `json:"currency"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(400, gin.H{"error": "Data konfigurasi tidak valid"})
@@ -123,6 +129,16 @@ func AdminSetMetaTracking(c *gin.Context) {
 		if b, e := json.Marshal(req.LabelEvents); e == nil {
 			database.SetAppSetting("meta_label_events", string(b))
 		}
+	}
+	if cv := strings.TrimSpace(req.ConvValue); cv != "" {
+		if v, e := strconv.ParseFloat(cv, 64); e == nil && v > 0 {
+			database.SetAppSetting("meta_conv_value", fmt.Sprintf("%.2f", v))
+		}
+	} else {
+		database.SetAppSetting("meta_conv_value", "")
+	}
+	if cur := strings.TrimSpace(req.Currency); cur != "" {
+		database.SetAppSetting("meta_currency", cur)
 	}
 	c.JSON(200, gin.H{"message": "Pengaturan Meta Pixel dan CAPI disimpan", "data": gin.H{
 		"enabled":          cfg.Enabled,

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"log"
+	"strings"
 
 	"wa-assistant/backend/database"
 	"wa-assistant/backend/models"
@@ -12,8 +13,45 @@ import (
 // jadi nomor telepon asli (pakai pemetaan LID->PN milik whatsmeow). Idempoten —
 // setelah semua terkonversi, panggilan berikutnya tidak menemukan kandidat lagi.
 // Dipanggil saat agent tersambung (store & pemetaan LID sudah siap).
+// recordSenderAlias disimpan di services (services.RecordSenderAlias).
+
+// resolveSenderAliasPN mencari nomor asli untuk identitas LID:
+// 1) tabel alias yang dipelajari (paling akurat — dari SenderAlt HP),
+// 2) store whatsmeow (LIDs.GetPNForLID).
+func resolveSenderAliasPN(agentID uint, lid string) string {
+	lid = strings.TrimSpace(lid)
+	if lid == "" {
+		return ""
+	}
+	var alias models.SenderAlias
+	if err := database.DB.Where("agent_id = ? AND lid = ?", agentID, lid).First(&alias).Error; err == nil && alias.PN != "" {
+		return services.NormalizePhone(alias.PN)
+	}
+	if pn := services.WA(agentID).PNForLID(lid); pn != "" {
+		return services.NormalizePhone(pn)
+	}
+	return ""
+}
+
+// healSenderIdentity menyatukan identitas ganda (LID → nomor asli) di semua
+// tabel data kontak. Tidak menghapus pesan — hanya mengganti kunci identitas.
+// Dipanggil secara kontinu setiap kali aktivitas dari LID tersentuh, sehingga
+// pecahan identitas apa pun otomatis tersatukan (tanpa menunggu reconnect).
+func healSenderIdentity(agentID uint, lid, pn string) {
+	database.DB.Model(&models.ChatHistory{}).
+		Where("agent_id = ? AND sender = ?", agentID, lid).
+		Update("sender", pn)
+	// Tabel status satu-baris-per-kontak: gabungkan (bila baris PN sudah ada,
+	// baris LID dihapus — mergeLIDState melakukan itu tanpa bentrok unik).
+	mergeLIDState(&models.InboxReadState{}, "sender", agentID, lid, pn)
+	mergeLIDState(&models.ConversationRead{}, "sender", agentID, lid, pn)
+	mergeLIDState(&models.Handoff{}, "sender", agentID, lid, pn)
+	mergeLIDState(&models.OptOut{}, "sender", agentID, lid, pn)
+	mergeLIDState(&models.Contact{}, "number", agentID, lid, pn)
+}
+
 func migrateLIDSenders(agentID uint) {
-	wa := services.WA(agentID)
+	_ = services.WA(agentID) // store WA tetap dihangatkan (pemetaan LID siap)
 
 	candidates := map[string]bool{}
 	addDistinct := func(model interface{}, col string) {
@@ -27,12 +65,28 @@ func migrateLIDSenders(agentID uint) {
 	addDistinct(&models.Handoff{}, "sender")
 	addDistinct(&models.OptOut{}, "sender")
 	addDistinct(&models.Contact{}, "number")
+	addDistinct(&models.InboxReadState{}, "sender")
+	addDistinct(&models.ConversationRead{}, "sender")
 
 	mapping := map[string]string{}
 	for v := range candidates {
-		if pn := wa.PNForLID(v); pn != "" && pn != v {
+		if pn := resolveSenderAliasPN(agentID, v); pn != "" && pn != v {
 			mapping[v] = pn
 		}
+	}
+	// Junk LID yang TIDAK bisa dipetakan: hapus dari inbox_read_states &
+	// conversation_reads agar daftar chat tidak menampilkan "nomor" aneh.
+	// (Tabel riwayat chat dibiarkan — tidak ada baris chat di bawahnya
+	// biasanya; data tidak dihancurkan membabi buta.)
+	for v := range candidates {
+		if !services.LooksLikeLID(v) {
+			continue
+		}
+		if _, ok := mapping[v]; ok {
+			continue
+		}
+		database.DB.Where("agent_id = ? AND sender = ?", agentID, v).Delete(&models.InboxReadState{})
+		database.DB.Where("agent_id = ? AND sender = ?", agentID, v).Delete(&models.ConversationRead{})
 	}
 	if len(mapping) == 0 {
 		return
@@ -45,6 +99,8 @@ func migrateLIDSenders(agentID uint) {
 		mergeLIDState(&models.Handoff{}, "sender", agentID, lid, pn)
 		mergeLIDState(&models.OptOut{}, "sender", agentID, lid, pn)
 		mergeLIDState(&models.Contact{}, "number", agentID, lid, pn)
+		mergeLIDState(&models.InboxReadState{}, "sender", agentID, lid, pn)
+		mergeLIDState(&models.ConversationRead{}, "sender", agentID, lid, pn)
 	}
 	log.Printf("Rapikan LID (agent %d): %d pengirim LID diubah ke nomor telepon", agentID, len(mapping))
 }

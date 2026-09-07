@@ -57,7 +57,7 @@ export default function WidgetPanel({ agentId }: { agentId: number }) {
 
   const snippet = useMemo(() => {
     if (!buttonLink) return '';
-    return `<!-- Tombol WhatsApp by SlaluDiskon -->
+    return `<!-- Tombol WhatsApp by CRM Dashboard -->
 <a href="${buttonLink}" target="_blank" rel="noopener" aria-label="Chat WhatsApp"
   style="position:fixed;${pos}:20px;bottom:20px;z-index:9999;width:60px;height:60px;border-radius:50%;background:${color};box-shadow:0 4px 14px rgba(0,0,0,.2);display:flex;align-items:center;justify-content:center;">
   ${waSvg('#fff')}

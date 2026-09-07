@@ -16,7 +16,7 @@ type broadcastGuardRecipient struct {
 }
 
 // BroadcastConsentSummary mengembalikan ringkasan catatan lokal untuk tampilan Kontak.
-// Angka ini berasal dari aktivitas SlaluDiskon, bukan quality rating atau verifikasi WhatsApp.
+// Angka ini berasal dari aktivitas akun, bukan quality rating atau verifikasi WhatsApp.
 func BroadcastConsentSummary(c *gin.Context) {
 	agentID, ok := resolveAgent(c)
 	if !ok {

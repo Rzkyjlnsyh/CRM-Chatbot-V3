@@ -71,9 +71,9 @@ func SaveAPIConfig(c *gin.Context) {
 	c.JSON(200, gin.H{"message": "Konfigurasi API disimpan"})
 }
 
-// ListEmbeddingModels mengembalikan katalog model embedding terbaru dari OpenRouter.
+// ListEmbeddingModels mengembalikan katalog model embedding sesuai provider aktif.
 func ListEmbeddingModels(c *gin.Context) {
-	models, err := services.ListOpenRouterEmbeddingModels(c.Request.Context())
+	models, err := services.ListEmbeddingModelsForProvider(c.Request.Context())
 	if err != nil {
 		c.JSON(502, gin.H{"error": err.Error()})
 		return
@@ -81,9 +81,9 @@ func ListEmbeddingModels(c *gin.Context) {
 	c.JSON(200, gin.H{"data": models})
 }
 
-// ListChatModels mengembalikan katalog model chat dari OpenRouter untuk pilihan di dashboard.
+// ListChatModels mengembalikan katalog model chat sesuai provider aktif.
 func ListChatModels(c *gin.Context) {
-	models, err := services.ListOpenRouterChatModels(c.Request.Context())
+	models, err := services.ListChatModelsForProvider(c.Request.Context())
 	if err != nil {
 		c.JSON(502, gin.H{"error": err.Error()})
 		return
@@ -92,7 +92,7 @@ func ListChatModels(c *gin.Context) {
 }
 
 func ListVisionModels(c *gin.Context) {
-	models, err := services.ListOpenRouterVisionModels(c.Request.Context())
+	models, err := services.ListVisionModelsForProvider(c.Request.Context())
 	if err != nil {
 		c.JSON(502, gin.H{"error": err.Error()})
 		return
