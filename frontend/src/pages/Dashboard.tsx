@@ -29,7 +29,7 @@ import ShieldIcon from '@mui/icons-material/ShieldOutlined';
 import ContactsIcon from '@mui/icons-material/ContactsOutlined';
 import PersonIcon from '@mui/icons-material/Person';
 import { QRCodeSVG } from 'qrcode.react';
-import logo from '../assets/logo-slaludiskon.png';
+import logo from '../assets/logo-crm-dashboard.png';
 import api from '../services/api';
 import { swalConfirm, swalAlert, swalToast } from '../services/swal';
 import SettingsIcon from '@mui/icons-material/Settings';
@@ -973,10 +973,10 @@ export default function Dashboard() {
                 bgcolor: 'background.paper', overflow: 'hidden',
               }}
             >
-              <img src={logo} alt="SlaluDiskon" style={{ width: 28, height: 28 }} />
+              <img src={logo} alt="CRM Dashboard" style={{ width: 28, height: 28 }} />
             </Box>
             <Box sx={{ minWidth: 0, display: { xs: 'none', sm: 'block' } }}>
-              <Typography sx={{ fontWeight: 600, fontSize: 14, lineHeight: 1.2, letterSpacing: '-0.01em' }}>SlaluDiskon</Typography>
+              <Typography sx={{ fontWeight: 600, fontSize: 14, lineHeight: 1.2, letterSpacing: '-0.01em' }}>CRM Dashboard</Typography>
               <Typography
                 variant="caption"
                 color="text.secondary"

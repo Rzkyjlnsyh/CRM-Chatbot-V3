@@ -307,7 +307,7 @@ func resolvePublicURL(raw string, maxRedirects int) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("User-Agent", "SlaluDiskonBot/1.0 (+location-link; customer-service)")
+	req.Header.Set("User-Agent", "CRM-AgentBot/1.0 (+location-link; customer-service)")
 	resp, err := client.Do(req)
 	if err == nil {
 		final := resp.Request.URL.String()
@@ -324,7 +324,7 @@ func resolvePublicURL(raw string, maxRedirects int) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("User-Agent", "SlaluDiskonBot/1.0 (+location-link; customer-service)")
+	req.Header.Set("User-Agent", "CRM-AgentBot/1.0 (+location-link; customer-service)")
 	resp, err = client.Do(req)
 	if err != nil {
 		return "", err
@@ -387,7 +387,7 @@ func enrichGenericLinkTitle(raw string) string {
 	if err != nil {
 		return ""
 	}
-	req.Header.Set("User-Agent", "SlaluDiskonBot/1.0 (+link-preview; customer-service)")
+	req.Header.Set("User-Agent", "CRM-AgentBot/1.0 (+link-preview; customer-service)")
 	req.Header.Set("Accept", "text/html,application/xhtml+xml")
 	resp, err := client.Do(req)
 	if err != nil {

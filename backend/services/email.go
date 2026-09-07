@@ -10,7 +10,8 @@ import (
 )
 
 // SendEmail mengirim email via Resend (https://resend.com).
-// Konfigurasi: RESEND_API_KEY di .env, EMAIL_FROM opsional (default "SlaluDiskon <admin@slaludiskon.com>").
+// Konfigurasi: RESEND_API_KEY di .env, EMAIL_FROM opsional
+// (default "CRM Dashboard <no-reply@crm-dashboard.app>").
 func SendEmail(to, subject, htmlBody string) error {
 	apiKey := os.Getenv("RESEND_API_KEY")
 	if apiKey == "" {
@@ -19,7 +20,7 @@ func SendEmail(to, subject, htmlBody string) error {
 	}
 	from := os.Getenv("EMAIL_FROM")
 	if from == "" {
-		from = "SlaluDiskon <admin@slaludiskon.com>"
+		from = "CRM Dashboard <no-reply@crm-dashboard.app>"
 	}
 
 	payload := map[string]any{

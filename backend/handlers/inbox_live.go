@@ -77,7 +77,7 @@ func LinkPreview(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "URL tidak valid"})
 		return
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; WontenBot/1.0)")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; WA-Client/1.0)")
 	resp, err := linkPreviewClient.Do(req)
 	if err != nil {
 		c.JSON(502, gin.H{"error": "Gagal mengambil halaman"})

@@ -1,6 +1,6 @@
 /*
- * SlaluDiskon — WhatsApp AI & Blast.
- * © 2026 slaludiskon.com. All rights reserved.
+ * CRM Dashboard — WhatsApp AI & Blast.
+ * © 2026 crm-dashboard.com. All rights reserved.
  */
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'

@@ -3,7 +3,7 @@ import { Box, Card, CardContent, Typography, Button, Alert, Link } from '@mui/ma
 import { useNavigate, useLocation } from 'react-router-dom';
 import MarkEmailReadOutlinedIcon from '@mui/icons-material/MarkEmailReadOutlined';
 import api from '../services/api';
-import logo from '../assets/logo-slaludiskon-login.png';
+import logo from '../assets/logo-crm-dashboard-login.png';
 
 export default function CheckEmail() {
   const navigate = useNavigate();

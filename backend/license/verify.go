@@ -74,7 +74,7 @@ type verificationResult struct {
 
 // Set these at build time for production. This prevents a user-editable .env
 // from changing the LMS endpoint or replacing the trusted signing key.
-// -ldflags "-X wa-assistant/backend/license.PinnedLicenseAPIURL=https://api.slaludiskon.com -X wa-assistant/backend/license.PinnedLicenseSigningPublicKey=<base64>"
+// -ldflags "-X wa-assistant/backend/license.PinnedLicenseAPIURL=https://license.example.com -X wa-assistant/backend/license.PinnedLicenseSigningPublicKey=<base64>"
 var (
 	PinnedLicenseAPIURL           string
 	PinnedLicenseSigningPublicKey string
@@ -265,7 +265,7 @@ func licenseAPIBaseURL() string {
 	if pinned := strings.TrimSpace(PinnedLicenseAPIURL); pinned != "" {
 		return strings.TrimRight(pinned, "/")
 	}
-	return strings.TrimRight(config.Env("LICENSE_API_URL", "https://api.slaludiskon.com"), "/")
+	return strings.TrimRight(config.Env("LICENSE_API_URL", ""), "/")
 }
 
 func newLicenseNonce() (string, error) {

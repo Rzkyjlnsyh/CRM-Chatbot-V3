@@ -187,7 +187,7 @@ func TestAPIMessage(c *gin.Context) {
 	}
 	text := strings.TrimSpace(req.Text)
 	if text == "" {
-		text = "Uji REST API SlaluDiskon — pesan dari dashboard."
+		text = "Uji REST API CRM Dashboard — pesan dari dashboard."
 	}
 	msgID, code, errMsg := deliverAPIMessage(id, to, apiMessageReq{To: to, Type: "text", Text: text})
 	if errMsg != "" {
@@ -216,7 +216,7 @@ func TestWebhook(c *gin.Context) {
 	}
 	body, _ := json.Marshal(gin.H{
 		"event": "webhook.test", "agent_id": agent.ID, "number": agent.Number,
-		"timestamp": time.Now().Unix(), "message": "Webhook SlaluDiskon berhasil terhubung.",
+		"timestamp": time.Now().Unix(), "message": "Webhook CRM Dashboard berhasil terhubung.",
 	})
 	req, err := newSignedWebhookRequest(agent.WebhookURL, agent.WebhookSecret, bytes.NewReader(body))
 	if err != nil {

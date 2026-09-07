@@ -361,7 +361,7 @@ export default function ContactsPanel({ agentId, onBroadcast, onOpenChat }: {
             <Divider />
             <Stack direction={{ xs: 'column', sm: 'row' }} sx={{ px: 1.25, py: 0.75, gap: 0.75, alignItems: { xs: 'flex-start', sm: 'center' } }}>
               <Typography variant="caption" color="text.secondary" sx={{ flex: 1 }}>
-                Kesiapan promo berdasarkan aktivitas di SlaluDiskon
+                Kesiapan promo berdasarkan aktivitas di CRM Dashboard
               </Typography>
               <Stack direction="row" sx={{ gap: 0.5, flexWrap: 'wrap' }}>
                 <Chip size="small" color="success" variant="outlined" label={`${consentSummary.marketing_consent} izin promo`} />

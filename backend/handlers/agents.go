@@ -2247,7 +2247,7 @@ func buildClosedContactReply(agent models.Agent, sender, msg, closedLabel string
 	greetings := []string{"halo", "hai", "hi", "pagi", "siang", "sore", "malam", "makasih", "terima kasih", "thanks", "ok", "oke", "siap"}
 	for _, g := range greetings {
 		if msg == g || strings.HasPrefix(msg, g) {
-			return "Halo kak! Terima kasih sudah order di slaludiskon.com 😊\n\nKalau ada yang bisa dibantu, boleh ditanyakan ya 🙏"
+			return "Halo kak! Terima kasih sudah order di toko kami 😊\n\nKalau ada yang bisa dibantu, boleh ditanyakan ya 🙏"
 		}
 	}
 

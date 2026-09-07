@@ -1592,7 +1592,7 @@ export default function InboxPanel({
                 <SmartToyIcon sx={{ fontSize: 36, color: WA.greenDark }} />
               </Box>
               <Typography sx={{ fontWeight: 300, fontSize: 28, color: '#41525d', mb: 1 }}>
-                SlaluDiskon Inbox
+                CRM Dashboard Inbox
               </Typography>
               <Typography sx={{ maxWidth: 420, color: WA.meta, fontSize: 14, lineHeight: 1.5 }}>
                 Pilih percakapan di kiri untuk membalas pelanggan. Chat AI, CS, dan pelanggan digabung dalam satu thread.

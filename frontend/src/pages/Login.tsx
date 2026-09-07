@@ -3,7 +3,7 @@ import { Box, TextField, Button, Typography, Alert, CircularProgress, Link } fro
 import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import { unlockInboxSound } from '../services/inboxSound';
-import logo from '../assets/logo-slaludiskon-login.png';
+import logo from '../assets/logo-crm-dashboard-login.png';
 
 function responseStatus(error: unknown) {
   if (typeof error === 'object' && error && 'response' in error) {

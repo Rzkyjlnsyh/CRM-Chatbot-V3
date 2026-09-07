@@ -1,5 +1,5 @@
-// SlaluDiskon — WhatsApp AI & Blast.
-// © 2026 slaludiskon.com. All rights reserved.
+// CRM Dashboard — backend.
+// Internal service.
 
 package main
 
