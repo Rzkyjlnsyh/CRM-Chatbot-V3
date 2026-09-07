@@ -6,12 +6,18 @@ import "time"
 // Token disimpan di DB (dapat dikonfigurasi dari UI), bukan env — pola
 // yang memungkinkan setiap CS memakai akun Lincah-nya sendiri.
 type LincahConfig struct {
-	ID        uint      `gorm:"primaryKey" json:"id"`
-	AgentID   uint      `gorm:"uniqueIndex:idx_lincah_config_agent;not null" json:"agent_id"`
-	PartnerID string    `gorm:"size:128" json:"partner_id"`
-	Token     string    `gorm:"size:512" json:"token"`
-	BaseURL   string    `gorm:"size:160;default:https://dev-api.lincah.id/openapi" json:"base_url"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID        uint   `gorm:"primaryKey" json:"id"`
+	AgentID   uint   `gorm:"uniqueIndex:idx_lincah_config_agent;not null" json:"agent_id"`
+	PartnerID string `gorm:"size:128" json:"partner_id"`
+	Token     string `gorm:"size:512" json:"token"`
+	BaseURL   string `gorm:"size:160;default:https://dev-api.lincah.id/openapi" json:"base_url"`
+	// AI Ongkir: AI menjawab pertanyaan ongkir dengan data Lincah nyata.
+	AIEnabled         bool      `gorm:"default:false" json:"ai_enabled"`
+	PreferredCouriers string    `gorm:"size:160" json:"preferred_couriers"`            // "jne,sap" (urutan utama)
+	FallbackCouriers  string    `gorm:"size:160" json:"fallback_couriers"`             // cadangan bila utama tak menjangkau
+	WarehouseMode     string    `gorm:"size:16;default:nearest" json:"warehouse_mode"` // nearest|first|fixed
+	FixedWarehouseID  string    `gorm:"size:64" json:"fixed_warehouse_id"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 // LincahOrder = audit trail pesanan yang dibuat lewat Lincah dari dashboard.

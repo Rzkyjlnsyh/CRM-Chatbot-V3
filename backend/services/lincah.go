@@ -70,21 +70,58 @@ func LincahGetConfig(agentID uint) LincahConfigProfile {
 
 // LincahSaveConfig menyimpan kredensial ke DB (upsert per agent).
 func LincahSaveConfig(agentID uint, partnerID, token, baseURL string) error {
-	if baseURL == "" {
-		baseURL = lincahDefaultBase
+	return LincahSaveConfigFull(agentID, LincahConfigUpdate{
+		PartnerID: partnerID, Token: token, BaseURL: baseURL,
+	})
+}
+
+// LincahConfigUpdate = seluruh kolom konfigurasi Lincah (termasuk AI ongkir).
+// Token KOSONG = "tidak diubah" (biarkan yang tersimpan).
+type LincahConfigUpdate struct {
+	PartnerID string
+	Token     string
+	BaseURL   string
+	AIEnabled bool
+	Preferred string
+	Fallback  string
+	WhMode    string
+	FixedWh   string
+}
+
+// LincahSaveConfigFull menyimpan seluruh konfigurasi Lincah per agent.
+func LincahSaveConfigFull(agentID uint, u LincahConfigUpdate) error {
+	if u.BaseURL == "" {
+		u.BaseURL = lincahDefaultBase
 	}
 	var cfg models.LincahConfig
 	err := database.DB.Where("agent_id = ?", agentID).First(&cfg).Error
 	if err != nil {
 		cfg = models.LincahConfig{AgentID: agentID}
 	}
-	cfg.PartnerID = partnerID
-	cfg.Token = token
-	cfg.BaseURL = baseURL
+	cfg.PartnerID = u.PartnerID
+	if u.Token != "" {
+		cfg.Token = u.Token
+	}
+	cfg.BaseURL = u.BaseURL
+	cfg.AIEnabled = u.AIEnabled
+	cfg.PreferredCouriers = u.Preferred
+	cfg.FallbackCouriers = u.Fallback
+	if u.WhMode != "" {
+		cfg.WarehouseMode = u.WhMode
+	}
+	if cfg.WarehouseMode == "" {
+		cfg.WarehouseMode = "nearest"
+	}
+	cfg.FixedWarehouseID = u.FixedWh
 	if cfg.ID == 0 {
 		return database.DB.Create(&cfg).Error
 	}
 	return database.DB.Save(&cfg).Error
+}
+
+// LincahClearConfig menghapus konfigurasi Lincah agent (mis. "Hapus token").
+func LincahClearConfig(agentID uint) error {
+	return database.DB.Where("agent_id = ?", agentID).Delete(&models.LincahConfig{}).Error
 }
 
 // LincahAPIError = galat yang dikembalikan server Lincah (status != 2xx).

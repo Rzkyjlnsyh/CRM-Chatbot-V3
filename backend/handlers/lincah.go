@@ -39,9 +39,14 @@ func GetLincahConfig(c *gin.Context) {
 	var cfg models.LincahConfig
 	_ = database.DB.Where("agent_id = ?", agentID).First(&cfg).Error
 	c.JSON(200, gin.H{
-		"partner_id": cfg.PartnerID,
-		"base_url":   cfg.BaseURL,
-		"token_set":  cfg.Token != "",
+		"partner_id":         cfg.PartnerID,
+		"base_url":           cfg.BaseURL,
+		"token_set":          cfg.Token != "",
+		"ai_enabled":         cfg.AIEnabled,
+		"preferred_couriers": cfg.PreferredCouriers,
+		"fallback_couriers":  cfg.FallbackCouriers,
+		"warehouse_mode":     cfg.WarehouseMode,
+		"fixed_warehouse_id": cfg.FixedWarehouseID,
 	})
 }
 
@@ -52,15 +57,29 @@ func SaveLincahConfig(c *gin.Context) {
 		return
 	}
 	var req struct {
-		PartnerID string `json:"partner_id"`
-		Token     string `json:"token"`
-		BaseURL   string `json:"base_url"`
+		PartnerID         string `json:"partner_id"`
+		Token             string `json:"token"`
+		BaseURL           string `json:"base_url"`
+		AIEnabled         bool   `json:"ai_enabled"`
+		PreferredCouriers string `json:"preferred_couriers"`
+		FallbackCouriers  string `json:"fallback_couriers"`
+		WarehouseMode     string `json:"warehouse_mode"`
+		FixedWarehouseID  string `json:"fixed_warehouse_id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(400, gin.H{"error": "body tidak valid"})
 		return
 	}
-	if err := services.LincahSaveConfig(agentID, strings.TrimSpace(req.PartnerID), strings.TrimSpace(req.Token), strings.TrimSpace(req.BaseURL)); err != nil {
+	if err := services.LincahSaveConfigFull(agentID, services.LincahConfigUpdate{
+		PartnerID: strings.TrimSpace(req.PartnerID),
+		Token:     strings.TrimSpace(req.Token),
+		BaseURL:   strings.TrimSpace(req.BaseURL),
+		AIEnabled: req.AIEnabled,
+		Preferred: req.PreferredCouriers,
+		Fallback:  req.FallbackCouriers,
+		WhMode:    req.WarehouseMode,
+		FixedWh:   req.FixedWarehouseID,
+	}); err != nil {
 		c.JSON(500, gin.H{"error": "gagal menyimpan: " + err.Error()})
 		return
 	}

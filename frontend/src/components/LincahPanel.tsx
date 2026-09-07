@@ -4,8 +4,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   Box, Button, Card, CardContent, Chip, CircularProgress, Dialog, DialogActions,
-  DialogContent, DialogTitle, Divider, Grid,
-  MenuItem, Select, TextField, Typography,
+  DialogContent, DialogTitle, Divider, FormControlLabel,
+  Grid, MenuItem, Select, Switch, TextField, Typography,
   Table, TableBody, TableCell, TableHead, TableRow,
   Alert, List, ListItem, ListItemText,
 } from '@mui/material';
@@ -19,6 +19,11 @@ interface LincahConfig {
   partner_id: string;
   base_url: string;
   token_set: boolean;
+  ai_enabled: boolean;
+  preferred_couriers: string;
+  fallback_couriers: string;
+  warehouse_mode: string;
+  fixed_warehouse_id: string;
 }
 
 interface Warehouse {
@@ -45,7 +50,10 @@ function rupiah(n: number) {
 
 export default function LincahPanel({ agentId }: { agentId: number }) {
   const qc = useQueryClient();
-  const [cfg, setCfg] = useState<LincahConfig>({ partner_id: '', base_url: DEV_BASE, token_set: false });
+  const [cfg, setCfg] = useState<LincahConfig>({
+    partner_id: '', base_url: DEV_BASE, token_set: false, ai_enabled: false,
+    preferred_couriers: '', fallback_couriers: '', warehouse_mode: 'nearest', fixed_warehouse_id: '',
+  });
   const [token, setToken] = useState('');
   const [testResult, setTestResult] = useState<string | null>(null);
   const [testError, setTestError] = useState<string | null>(null);
@@ -232,6 +240,45 @@ export default function LincahPanel({ agentId }: { agentId: number }) {
                 </Button>
               </Box>
             </Grid>
+          </Grid>
+          <Divider sx={{ my: 2 }} />
+          <Typography variant="subtitle2">🤖 AI Jawab Ongkir (otomatis saat customer bertanya ongkir)</Typography>
+          <Grid container spacing={1.5} sx={{ mt: 0.5 }}>
+            <Grid size={{ xs: 12 }}>
+              <FormControlLabel
+                control={<Switch checked={cfg.ai_enabled}
+                  onChange={(e) => setCfg({ ...cfg, ai_enabled: e.target.checked })} />}
+                label={cfg.ai_enabled ? 'Aktif — AI menjawab ongkir dengan tarif asli Lincah' : 'Nonaktif'} />
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6 }}>
+              <TextField size="small" fullWidth label="Ekspedisi utama (kode, koma)" value={cfg.preferred_couriers}
+                placeholder="jne, sap" helperText="Urutan prioritas: mis. jne, sap"
+                onChange={(e) => setCfg({ ...cfg, preferred_couriers: e.target.value })} />
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6 }}>
+              <TextField size="small" fullWidth label="Fallback (kode, koma)" value={cfg.fallback_couriers}
+                placeholder="ninja, lalamove" helperText="Dipakai bila utama tidak menjangkau"
+                onChange={(e) => setCfg({ ...cfg, fallback_couriers: e.target.value })} />
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6 }}>
+              <Select size="small" fullWidth value={cfg.warehouse_mode || 'nearest'}
+                onChange={(e) => setCfg({ ...cfg, warehouse_mode: e.target.value as string })}>
+                <MenuItem value="nearest">Gudang terdekat lokasi customer</MenuItem>
+                <MenuItem value="first">Gudang pertama di daftar</MenuItem>
+                <MenuItem value="fixed">Gudang tetap (pilih di bawah)</MenuItem>
+              </Select>
+            </Grid>
+            {cfg.warehouse_mode === 'fixed' && (
+              <Grid size={{ xs: 12, sm: 6 }}>
+                <Select size="small" fullWidth value={cfg.fixed_warehouse_id} displayEmpty
+                  onChange={(e) => setCfg({ ...cfg, fixed_warehouse_id: e.target.value as string })}>
+                  <MenuItem value="">Pilih gudang tetap…</MenuItem>
+                  {(warehouses || []).map((w) => (
+                    <MenuItem key={w._id} value={w._id}>{w.name || w.address || w._id}</MenuItem>
+                  ))}
+                </Select>
+              </Grid>
+            )}
           </Grid>
           {testResult && <Alert severity="success" sx={{ mt: 1.5 }}>{testResult}</Alert>}
           {testError && <Alert severity="error" sx={{ mt: 1.5 }}>{testError}</Alert>}

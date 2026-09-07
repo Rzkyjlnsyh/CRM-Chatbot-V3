@@ -1246,6 +1246,14 @@ func maybeBuildShippingContext(agent models.Agent, msg string, history []models.
 
 	// Cari kota via Mengantar
 	log.Printf("[shipping] Searching address for: %q", destText)
+	// PRIORITAS: bila AI-ongkir Lincah aktif di agent ini, coba data Lincah
+	// dulu (gudang terdekat + tarif asli). Bila tidak menghasilkan blok,
+	// lanjut ke jalur Mengantar yang sudah ada.
+	if services.LincahAIEnabled(agent.ID) {
+		if block, ok := services.LincahShippingBlock(agent.ID, destText); ok {
+			return block
+		}
+	}
 	addresses, err := services.SearchAddress(destText)
 	if err != nil || len(addresses) == 0 {
 		// Coba dengan prefix "kota" untuk pencarian lebih spesifik
