@@ -113,6 +113,7 @@ func Init() {
 		&models.SenderAlias{},
 		&models.LincahConfig{},
 		&models.LincahOrder{},
+		&models.LincahTenantConfig{},
 	)
 
 	backfillKnowledgeCharCount()

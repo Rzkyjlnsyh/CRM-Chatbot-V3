@@ -38,6 +38,8 @@ func GetLincahConfig(c *gin.Context) {
 	}
 	var cfg models.LincahConfig
 	_ = database.DB.Where("agent_id = ?", agentID).First(&cfg).Error
+	var tcfg models.LincahTenantConfig
+	_ = database.DB.Where("tenant_id = ?", currentTenantID(c)).First(&tcfg).Error
 	c.JSON(200, gin.H{
 		"partner_id":         cfg.PartnerID,
 		"base_url":           cfg.BaseURL,
@@ -47,10 +49,15 @@ func GetLincahConfig(c *gin.Context) {
 		"fallback_couriers":  cfg.FallbackCouriers,
 		"warehouse_mode":     cfg.WarehouseMode,
 		"fixed_warehouse_id": cfg.FixedWarehouseID,
+		// Kredensial bersama (satu akun Lincah untuk semua nomor WA)
+		"tenant_partner_id": tcfg.PartnerID,
+		"tenant_token_set":  tcfg.Token != "",
+		"tenant_base_url":   tcfg.BaseURL,
 	})
 }
 
-// SaveLincahConfig — simpan kredensial dari UI (partner-id + token + mode).
+// SaveLincahConfig — simpan kredensial dari UI. scope=tenant → kredensial
+// dipakai BERSAMA semua agent (1 akun Lincah); default → khusus agent ini.
 func SaveLincahConfig(c *gin.Context) {
 	agentID, ok := lincahAgentID(c)
 	if !ok {
@@ -65,10 +72,18 @@ func SaveLincahConfig(c *gin.Context) {
 		FallbackCouriers  string `json:"fallback_couriers"`
 		WarehouseMode     string `json:"warehouse_mode"`
 		FixedWarehouseID  string `json:"fixed_warehouse_id"`
+		Scope             string `json:"scope"` // "" | "agent" | "tenant"
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(400, gin.H{"error": "body tidak valid"})
 		return
+	}
+	if req.Scope == "tenant" {
+		if err := services.LincahSaveTenantConfig(currentTenantID(c),
+			strings.TrimSpace(req.PartnerID), strings.TrimSpace(req.Token), strings.TrimSpace(req.BaseURL)); err != nil {
+			c.JSON(500, gin.H{"error": "gagal menyimpan kredensial bersama: " + err.Error()})
+			return
+		}
 	}
 	if err := services.LincahSaveConfigFull(agentID, services.LincahConfigUpdate{
 		PartnerID: strings.TrimSpace(req.PartnerID),

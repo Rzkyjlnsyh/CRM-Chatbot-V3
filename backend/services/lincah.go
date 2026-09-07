@@ -49,23 +49,73 @@ type LincahConfigProfile struct {
 	BaseURL   string
 }
 
-// LincahGetConfig mengambil kredensial dari DB (per agent); bila belum ada,
-// fallback ke env (mengantisipasi deployment yang konfigurasinya di env).
+// LincahGetConfig mengambil kredensial dari DB dengan URUTAN FALLBACK:
+//  1. konfigurasi per-agent (token agent sendiri)
+//  2. konfigurasi TENANT (satu akun Lincah untuk semua nomor WA)
+//  3. env (deployment manual)
+//
+// Hasilnya: klien cukup mengisi SATU kali untuk semua agent — agent hanya
+// menimpa bila butuh akun Lincah berbeda.
 func LincahGetConfig(agentID uint) LincahConfigProfile {
 	var cfg models.LincahConfig
 	err := database.DB.Where("agent_id = ?", agentID).First(&cfg).Error
-	if err != nil || cfg.Token == "" {
+	if err == nil && cfg.Token != "" {
 		return LincahConfigProfile{
-			PartnerID: config.Env("LINCAH_PARTNER_ID", ""),
-			Token:     config.Env("LINCAH_TOKEN", ""),
-			BaseURL:   config.Env("LINCAH_BASE_URL", lincahDefaultBase),
+			PartnerID: cfg.PartnerID,
+			Token:     cfg.Token,
+			BaseURL:   orDefaultBase(cfg.BaseURL),
 		}
 	}
-	base := cfg.BaseURL
-	if base == "" {
-		base = lincahDefaultBase
+	var tcfg models.LincahTenantConfig
+	var tid uint
+	if agentID != 0 {
+		var agent models.Agent
+		if database.DB.Select("tenant_id").Where("id = ?", agentID).First(&agent).Error == nil {
+			tid = agent.TenantID
+		}
 	}
-	return LincahConfigProfile{PartnerID: cfg.PartnerID, Token: cfg.Token, BaseURL: base}
+	if tid != 0 {
+		if database.DB.Where("tenant_id = ?", tid).First(&tcfg).Error == nil && tcfg.Token != "" {
+			return LincahConfigProfile{
+				PartnerID: tcfg.PartnerID,
+				Token:     tcfg.Token,
+				BaseURL:   orDefaultBase(tcfg.BaseURL),
+			}
+		}
+	}
+	return LincahConfigProfile{
+		PartnerID: config.Env("LINCAH_PARTNER_ID", ""),
+		Token:     config.Env("LINCAH_TOKEN", ""),
+		BaseURL:   config.Env("LINCAH_BASE_URL", lincahDefaultBase),
+	}
+}
+
+func orDefaultBase(base string) string {
+	if base == "" {
+		return lincahDefaultBase
+	}
+	return base
+}
+
+// LincahSaveTenantConfig menyimpan kredensial Lincah level tenant (upsert).
+func LincahSaveTenantConfig(tenantID uint, partnerID, token, baseURL string) error {
+	if baseURL == "" {
+		baseURL = lincahDefaultBase
+	}
+	var cfg models.LincahTenantConfig
+	err := database.DB.Where("tenant_id = ?", tenantID).First(&cfg).Error
+	if err != nil {
+		cfg = models.LincahTenantConfig{TenantID: tenantID}
+	}
+	cfg.PartnerID = partnerID
+	if token != "" {
+		cfg.Token = token
+	}
+	cfg.BaseURL = baseURL
+	if cfg.ID == 0 {
+		return database.DB.Create(&cfg).Error
+	}
+	return database.DB.Save(&cfg).Error
 }
 
 // LincahSaveConfig menyimpan kredensial ke DB (upsert per agent).

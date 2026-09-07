@@ -44,6 +44,8 @@ interface LincahOrder {
   weight: number; fee: number; created_at: string;
 }
 
+interface LincahCourier { code: string; _id?: string; name: string }
+
 function rupiah(n: number) {
   return 'Rp ' + Number(n || 0).toLocaleString('id-ID');
 }
@@ -58,6 +60,11 @@ export default function LincahPanel({ agentId }: { agentId: number }) {
   const [testResult, setTestResult] = useState<string | null>(null);
   const [testError, setTestError] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
+  // connected = koneksi Lincah TERBUKTI (Tes Koneksi sukses). Data nyata
+  // (gudang/kurir/pesanan) HANYA diambil setelah ini — mencegah banjir 502
+  // di console saat token belum ada/salah.
+  const [connected, setConnected] = useState(false);
+  const [scopeTenant, setScopeTenant] = useState(false);
 
   // Form cek ongkir
   const [originId, setOriginId] = useState('');
@@ -85,21 +92,26 @@ export default function LincahPanel({ agentId }: { agentId: number }) {
   const { data: warehouses = [] as Warehouse[], refetch: refetchWh } = useQuery({
     queryKey: ['lincah-addresses', agentId],
     queryFn: async () => ((await api.get(`/agents/${agentId}/lincah/addresses`)).data?.data ?? []) as Warehouse[],
-    enabled: !!cfgData?.token_set,
+    enabled: connected,
+  });
+
+  const { data: couriers = [] as LincahCourier[], } = useQuery({
+    queryKey: ['lincah-couriers', agentId],
+    queryFn: async () => ((await api.get(`/agents/${agentId}/lincah/couriers`)).data?.data ?? []) as LincahCourier[],
+    enabled: connected,
   });
 
   const { data: orders = [] as LincahOrder[], refetch: refetchOrders } = useQuery({
     queryKey: ['lincah-orders', agentId],
     queryFn: async () => ((await api.get(`/agents/${agentId}/lincah/orders`)).data?.data ?? []) as LincahOrder[],
-    enabled: !!cfgData?.token_set,
+    enabled: connected,
   });
 
   const save = useCallback(async () => {
-    await api.put(`/agents/${agentId}/lincah/config`, { ...cfg, token });
+    await api.put(`/agents/${agentId}/lincah/config`, { ...cfg, token, scope: scopeTenant ? 'tenant' : 'agent' });
     setToken('');
     await refetchCfg();
-    qc.invalidateQueries({ queryKey: ['lincah-addresses', agentId] });
-  }, [agentId, cfg, token, qc, refetchCfg]);
+  }, [agentId, cfg, token, scopeTenant, refetchCfg]);
 
   const doTest = useCallback(async () => {
     setTesting(true);
@@ -108,7 +120,9 @@ export default function LincahPanel({ agentId }: { agentId: number }) {
     try {
       const r = (await api.post(`/agents/${agentId}/lincah/test`)).data;
       setTestResult(`✅ ${r.name} — ${r.email}${typeof r.balance === 'number' ? ` · Saldo: ${rupiah(r.balance)}` : ''}`);
+      setConnected(true);
     } catch (e: any) {
+      setConnected(false);
       setTestError(e?.response?.data?.error || String(e));
     } finally {
       setTesting(false);
@@ -240,6 +254,25 @@ export default function LincahPanel({ agentId }: { agentId: number }) {
                 </Button>
               </Box>
             </Grid>
+            <Grid size={{ xs: 12 }}>
+              <FormControlLabel
+                control={<Switch checked={scopeTenant}
+                  onChange={(e) => setScopeTenant(e.target.checked)} />}
+                label="Terapkan kredensial ini ke SEMUA nomor WA (1 akun Lincah untuk semua agent)" />
+              {cfgData && (cfgData as any).tenant_token_set && !(cfg as any).token_set && (
+                <Alert severity="info" sx={{ mt: 0.5 }}>Kredensial sedang dipakai dari akun bersama (tenant).</Alert>
+              )}
+            </Grid>
+            {connected && couriers.length > 0 && (
+              <Grid size={{ xs: 12 }}>
+                <Typography variant="caption" color="text.secondary">
+                  Kurir tersedia di akun Lincah: {couriers.map((c) => (
+                    <Chip key={c.code || c._id} size="small" variant="outlined"
+                      label={`${c.name} (${c.code || c._id})`} sx={{ mr: 0.5, mb: 0.5 }} />
+                  ))}
+                </Typography>
+              </Grid>
+            )}
           </Grid>
           <Divider sx={{ my: 2 }} />
           <Typography variant="subtitle2">🤖 AI Jawab Ongkir (otomatis saat customer bertanya ongkir)</Typography>

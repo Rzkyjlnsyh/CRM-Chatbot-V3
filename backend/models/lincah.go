@@ -2,6 +2,18 @@ package models
 
 import "time"
 
+// LincahTenantConfig = kredensial Lincah di level AKUN/tenant — SATU akun
+// Lincah dipakai bersama oleh semua nomor WA (agent) tenant tersebut.
+// Agent hanya menimpa bila ia punya token sendiri (LincahConfig).
+type LincahTenantConfig struct {
+	ID        uint      `gorm:"primaryKey" json:"id"`
+	TenantID  uint      `gorm:"uniqueIndex:idx_lincah_tenant_cfg;not null" json:"tenant_id"`
+	PartnerID string    `gorm:"size:128" json:"partner_id"`
+	Token     string    `gorm:"size:512" json:"token"`
+	BaseURL   string    `gorm:"size:160;default:https://dev-api.lincah.id/openapi" json:"base_url"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 // LincahConfig = kredensial & mode integrasi Lincah per agent (CS).
 // Token disimpan di DB (dapat dikonfigurasi dari UI), bukan env — pola
 // yang memungkinkan setiap CS memakai akun Lincah-nya sendiri.

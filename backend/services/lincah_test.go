@@ -137,7 +137,7 @@ func setupLincahTestDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("gagal buka db tes: %v", err)
 	}
-	if err := db.AutoMigrate(&models.LincahConfig{}); err != nil {
+	if err := db.AutoMigrate(&models.LincahConfig{}, &models.LincahTenantConfig{}, &models.Agent{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	old := database.DB
@@ -151,6 +151,33 @@ func registerConfig(t *testing.T, base string) {
 	setupLincahTestDB(t)
 	if err := LincahSaveConfig(1, "partnerid-abc", "tokentest", base); err != nil {
 		t.Fatalf("gagal simpan config: %v", err)
+	}
+}
+
+func TestLincahTenantConfigFallback(t *testing.T) {
+	srv, _ := lincahMockServer(t)
+	defer srv.Close()
+	setupLincahTestDB(t)
+	// Agent 1 milik tenant 77; kredensial di level TENANT (1 akun utk semua WA).
+	database.DB.Create(&models.Agent{ID: 1, TenantID: 77, Name: "WA Test", Number: "6281"})
+	if err := LincahSaveTenantConfig(77, "partnerid-abc", "tokentest", srv.URL); err != nil {
+		t.Fatalf("tenant save: %v", err)
+	}
+	cfg := LincahGetConfig(1)
+	if cfg.Token != "tokentest" || cfg.PartnerID != "partnerid-abc" {
+		t.Fatalf("harus fallback ke config tenant, dapat: %+v", cfg)
+	}
+	me, err := LincahMe(1)
+	if err != nil || me.Name != "Raizen Partner" {
+		t.Fatalf("Me via tenant: err=%v me=%+v", err, me)
+	}
+	// Agent dengan token SENDIRI menimpa tenant.
+	if err := LincahSaveConfig(1, "p-own", "token-own", srv.URL); err != nil {
+		t.Fatal(err)
+	}
+	cfg2 := LincahGetConfig(1)
+	if cfg2.Token != "token-own" {
+		t.Fatalf("token agent sendiri harus menang: %+v", cfg2)
 	}
 }
 
