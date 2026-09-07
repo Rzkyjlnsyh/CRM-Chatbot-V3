@@ -49,6 +49,95 @@ type ChatModelInfo struct {
 	} `json:"architecture,omitempty"`
 }
 
+// ActiveChatProvider mengembalikan provider chat aktif: "deepseek-direct"
+// bila user memilih DeepSeek Direct, selain itu "openrouter".
+func ActiveChatProvider() string {
+	pk := database.GetAppSetting("chat_provider", "")
+	if pk == "deepseek-direct" {
+		return "deepseek-direct"
+	}
+	return "openrouter"
+}
+
+// ListDeepSeekChatModels mengambil katalog model dari API DeepSeek
+// (GET /models) — dipakai bila provider aktif = DeepSeek Direct.
+func ListDeepSeekChatModels(ctx context.Context) ([]ChatModelInfo, error) {
+	key := apiKeyFromDB("deepseek_api_key", "DEEPSEEK_API_KEY")
+	if key == "" {
+		return nil, fmt.Errorf("API key DeepSeek belum dikonfigurasi")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, deepseekBase+"/models", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Accept", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("gagal mengambil katalog model DeepSeek: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("DeepSeek mengembalikan status %d (cek API key)", resp.StatusCode)
+	}
+	var payload struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, fmt.Errorf("respons katalog DeepSeek tidak valid: %w", err)
+	}
+	// Konteks default per model DeepSeek yang dikenal (API tidak menyertakannya).
+	ctxLen := func(id string) int {
+		switch {
+		case strings.Contains(id, "reasoner"):
+			return 128000
+		case strings.Contains(id, "vl"):
+			return 32000
+		default:
+			return 64000
+		}
+	}
+	out := make([]ChatModelInfo, 0, len(payload.Data))
+	for _, m := range payload.Data {
+		out = append(out, ChatModelInfo{ID: m.ID, Name: m.ID, ContextLength: ctxLen(m.ID)})
+	}
+	return out, nil
+}
+
+// ListChatModelsForProvider = katalog chat sesuai provider aktif.
+func ListChatModelsForProvider(ctx context.Context) ([]ChatModelInfo, error) {
+	if ActiveChatProvider() == "deepseek-direct" {
+		return ListDeepSeekChatModels(ctx)
+	}
+	return ListOpenRouterChatModels(ctx)
+}
+
+// ListVisionModelsForProvider = katalog model vision sesuai provider aktif.
+func ListVisionModelsForProvider(ctx context.Context) ([]ChatModelInfo, error) {
+	if ActiveChatProvider() == "deepseek-direct" {
+		models, err := ListDeepSeekChatModels(ctx)
+		if err != nil {
+			return nil, err
+		}
+		var vision []ChatModelInfo
+		for _, m := range models {
+			id := strings.ToLower(m.ID)
+			if strings.Contains(id, "vl") || strings.Contains(id, "vision") || strings.Contains(id, "multimodal") {
+				vision = append(vision, m)
+			}
+		}
+		if len(vision) == 0 {
+			return nil, fmt.Errorf("katalog DeepSeek saat ini tidak memuat model vision — aktifkan vision lewat OpenRouter, atau ketik nama model secara manual di pengaturan")
+		}
+		return vision, nil
+	}
+	return ListOpenRouterVisionModels(ctx)
+}
+
 // ListOpenRouterChatModels mengambil katalog model chat terbaru dari OpenRouter.
 func ListOpenRouterChatModels(ctx context.Context) ([]ChatModelInfo, error) {
 	key := apiKeyFromDB("api_key", "OPENROUTER_API_KEY")
@@ -1825,4 +1914,3 @@ func resolveChatAttachment(reply string) (mediaType, mediaRef, cleanReply string
 	}
 	return "", "", reply
 }
-
