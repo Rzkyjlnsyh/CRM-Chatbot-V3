@@ -114,7 +114,6 @@ func Init() {
 		&models.LincahConfig{},
 		&models.LincahOrder{},
 		&models.LincahTenantConfig{},
-		&models.MetaAdsSnapshot{},
 	)
 
 	backfillKnowledgeCharCount()

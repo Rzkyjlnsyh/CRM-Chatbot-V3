@@ -823,9 +823,13 @@ export interface MetaConfigData {
   graph_version: string;
   test_event_code: string;
   configured: boolean;
+  token_configured?: boolean;
   conv_labels: string;
   event_name: string;
   label_events: Record<string, string>;
+  conv_value: string;
+  currency: string;
+  standard_events: string[];
   stats?: MetaStats;
 }
 

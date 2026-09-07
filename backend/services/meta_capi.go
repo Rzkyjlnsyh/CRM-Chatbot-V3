@@ -491,9 +491,11 @@ func FireClosingMetaConversion(agentID uint, sender string) {
 	eventName := database.GetAppSetting(metaEventNameKey, "Purchase")
 	eventID := fmt.Sprintf("closing:%d:%s", agentID, metaHash(sender))
 	value := metaPurchaseValue(agentID, sender)
-	custom := map[string]any{"currency": "IDR"}
+	custom := map[string]any{"currency": metaCurrency()}
 	if value > 0 {
 		custom["value"] = value
+	} else if cv := metaConvValue(); cv > 0 {
+		custom["value"] = cv
 	}
 	_ = EnqueueMetaEvent(MetaEventInput{
 		EventID:    eventID,

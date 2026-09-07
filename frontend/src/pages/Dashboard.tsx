@@ -49,7 +49,6 @@ import AutoReplyPanel from '../components/AutoReplyPanel';
 import MediaAssetsPanel from '../components/MediaAssetsPanel';
 import LearningPanel from '../components/LearningPanel';
 import MetaCapiPanel from '../components/MetaCapiPanel';
-import MetaAdsPanel from '../components/MetaAdsPanel';
 import PipelinePanel from '../components/PipelinePanel';
 import FlowPanel from '../components/FlowPanel';
 import ApiPanel from '../components/ApiPanel';
@@ -233,7 +232,6 @@ const NAV_GROUPS = [
   { section: 'Kampanye', items: [
     { id: 'broadcast', label: 'Blast', icon: <CampaignIcon fontSize="small" /> },
     { id: 'meta-capi', label: 'Meta CAPI', icon: <CampaignIcon fontSize="small" /> },
-    { id: 'meta-ads', label: 'Meta Ads', icon: <CampaignIcon fontSize="small" /> },
     { id: 'kalender', label: 'Jadwal Blast', icon: <CalendarIcon fontSize="small" /> },
     { id: 'status', label: 'Status / Story', icon: <AutoStoriesIcon fontSize="small" /> },
     { id: 'follow-up', label: 'Follow-up', icon: <FollowUpIcon fontSize="small" /> },
@@ -2406,7 +2404,6 @@ export default function Dashboard() {
         {tab === 'ai-learning' && <LearningPanel agentId={agentId} />}
         {tab === 'pipeline' && <PipelinePanel agentId={agentId} />}
         {tab === 'meta-capi' && <MetaCapiPanel agentId={agentId} />}
-        {tab === 'meta-ads' && <MetaAdsPanel />}
         {tab === 'alur' && <FlowPanel agentId={agentId} />}
         {tab === 'api' && <ApiPanel agentId={agentId} onOpenDashboard={() => setTab('dashboard')} />}
         {tab === 'lincah' && <LincahPanel agentId={agentId} />}
