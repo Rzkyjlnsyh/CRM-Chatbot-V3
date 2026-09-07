@@ -4,6 +4,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 
@@ -144,6 +145,13 @@ func LincahSearchDistrictHandler(c *gin.Context) {
 	}
 	list, err := services.LincahSearchDistrict(agentID, q)
 	if err != nil {
+		// Token belum ada/401 → balas kosong 200 (bukan error) — pencarian
+		// otomatis kosong dan console bersih saat belum terkoneksi.
+		var apiErr *services.LincahAPIError
+		if errors.As(err, &apiErr) && (apiErr.Status == 401 || apiErr.Status == 403) {
+			c.JSON(200, gin.H{"data": []services.LincahDistrict{}})
+			return
+		}
 		c.JSON(502, gin.H{"error": err.Error()})
 		return
 	}

@@ -86,7 +86,7 @@ export default function LincahPanel({ agentId }: { agentId: number }) {
   const [distLoading, setDistLoading] = useState(false);
   useEffect(() => {
     const q = distInput.trim();
-    if (q.length < 3) {
+    if (q.length < 3 || !connected) {
       setDistOptions([]);
       return;
     }
@@ -103,7 +103,7 @@ export default function LincahPanel({ agentId }: { agentId: number }) {
       }
     }, 400);
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [distInput, agentId]);
+  }, [distInput, agentId, connected]);
 
   const districtLabel = (o: DistrictOpt | string) =>
     typeof o === 'string' ? o : `${o.name}, ${o.city_type} ${o.city}, ${o.province} (${o.code})`;
@@ -119,7 +119,11 @@ export default function LincahPanel({ agentId }: { agentId: number }) {
     queryFn: async () => (await api.get(`/agents/${agentId}/lincah/config`)).data as LincahConfig,
   });
   useEffect(() => {
-    if (cfgData) setCfg(cfgData);
+    if (cfgData) {
+      // MERGE dengan state lama → field absen tetap terdefinisi
+      // (mencegah warning controlled/uncontrolled React di Switch/Input).
+      setCfg((prev) => ({ ...prev, ...cfgData }));
+    }
   }, [cfgData]);
 
   const { data: warehouses = [] as Warehouse[], refetch: refetchWh } = useQuery({
