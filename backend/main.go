@@ -138,6 +138,12 @@ func main() {
 		api.GET("/settings/api-config", handlers.AuthMiddleware(), handlers.GetAPIConfig)
 		api.PUT("/settings/api-config", handlers.AuthMiddleware(), handlers.RequireSuperAdmin(), handlers.SaveAPIConfig)
 		api.GET("/settings/embedding-models", handlers.AuthMiddleware(), handlers.RequireSuperAdmin(), handlers.ListEmbeddingModels)
+		// Meta ADS (admin): konfigurasi akun iklan, tarik insights, analisis AI.
+		api.GET("/meta-ads/config", handlers.AuthMiddleware(), handlers.RequireSuperAdmin(), handlers.MetaAdsConfigGet)
+		api.PUT("/meta-ads/config", handlers.AuthMiddleware(), handlers.RequireSuperAdmin(), handlers.MetaAdsConfigHandler)
+		api.POST("/meta-ads/refresh", handlers.AuthMiddleware(), handlers.RequireSuperAdmin(), handlers.MetaAdsRefreshHandler)
+		api.GET("/meta-ads/data", handlers.AuthMiddleware(), handlers.RequireSuperAdmin(), handlers.MetaAdsDataHandler)
+		api.POST("/meta-ads/analyze", handlers.AuthMiddleware(), handlers.RequireSuperAdmin(), handlers.MetaAdsAnalyzeHandler)
 		api.GET("/settings/chat-models", handlers.AuthMiddleware(), handlers.RequireSuperAdmin(), handlers.ListChatModels)
 		api.GET("/settings/vision-models", handlers.AuthMiddleware(), handlers.RequireSuperAdmin(), handlers.ListVisionModels)
 
